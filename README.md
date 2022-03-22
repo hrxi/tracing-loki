@@ -4,6 +4,8 @@ tracing-loki
 A [tracing](https://github.com/tokio-rs/tracing) layer for [Grafana
 Loki](https://grafana.com/oss/loki/).
 
+[![Build status](https://github.com/hrxi/tracing-loki/actions/workflows/build.yaml/badge.svg)](https://github.com/hrxi/tracing-loki/actions/workflows/build.yaml)
+
 Documentation
 -------------
 
