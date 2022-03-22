@@ -11,7 +11,8 @@ use url::Url;
 fn tracing_setup() -> Result<(), Box<dyn Error>> {
     let (layer, task) = tracing_loki::layer(
         Url::parse("http://127.0.0.1:3100").unwrap(),
-        &vec![("host".into(), "mine".into())].into_iter().collect(),
+        vec![("host".into(), "mine".into())].into_iter().collect(),
+        vec![].into_iter().collect(),
     )?;
     tracing_subscriber::registry()
         .with(LevelFilter::INFO)

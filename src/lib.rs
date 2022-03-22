@@ -59,17 +59,21 @@ impl error::Error for Error {}
 
 pub fn layer(
     loki_url: Url,
-    labels: &HashMap<String, String>,
+    mut labels: HashMap<String, String>,
+    extra_fields: HashMap<String, String>,
 ) -> Result<(Layer, BackgroundTask), Error> {
-    let _default_guard = tracing::subscriber::set_default(NoSubscriber::default());
     let (sender, receiver) = mpsc::channel(512);
     Ok((
-        Layer { sender },
-        BackgroundTask::new(loki_url, receiver, &mut labels.clone())?,
+        Layer {
+            sender,
+            extra_fields,
+        },
+        BackgroundTask::new(loki_url, receiver, &mut labels)?,
     ))
 }
 
 pub struct Layer {
+    extra_fields: HashMap<String, String>,
     sender: mpsc::Sender<LokiEvent>,
 }
 
@@ -84,6 +88,8 @@ struct LokiEvent {
 struct SerializedEvent<'a> {
     #[serde(flatten)]
     event: SerializeEventFieldMapStrippingLog<'a>,
+    #[serde(flatten)]
+    extra_fields: &'a HashMap<String, String>,
     _spans: &'a [&'a str],
     _target: &'a str,
     _module_path: Option<&'a str>,
@@ -177,6 +183,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             level: *meta.level(),
             message: serde_json::to_string(&SerializedEvent {
                 event: SerializeEventFieldMapStrippingLog(&event),
+                extra_fields: &self.extra_fields,
                 _spans: &spans,
                 _target: meta.target(),
                 _module_path: meta.module_path(),
