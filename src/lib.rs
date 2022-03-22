@@ -1,3 +1,6 @@
+#![allow(clippy::or_fun_call)]
+#![allow(clippy::type_complexity)]
+
 use loki_api::logproto as loki;
 use loki_api::prost;
 use serde::Serialize;
@@ -182,7 +185,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             timestamp,
             level: *meta.level(),
             message: serde_json::to_string(&SerializedEvent {
-                event: SerializeEventFieldMapStrippingLog(&event),
+                event: SerializeEventFieldMapStrippingLog(event),
                 extra_fields: &self.extra_fields,
                 _spans: &spans,
                 _target: meta.target(),
@@ -222,7 +225,7 @@ impl SendQueue {
         match result {
             Ok(()) => self.sending.clear(),
             Err(()) => {
-                self.sending.extend(self.to_send.drain(..));
+                self.sending.append(&mut self.to_send);
                 mem::swap(&mut self.sending, &mut self.to_send);
             }
         }
@@ -313,7 +316,7 @@ impl BackgroundTask {
                 .map_err(|_| Error::InvalidLokiUrl)?,
             queues: LevelMap::try_from_fn(|level| {
                 labels.insert("level".into(), level_str(level).into());
-                let labels_encoded = labels_to_string(&labels)?;
+                let labels_encoded = labels_to_string(labels)?;
                 labels.remove("level");
                 Ok(SendQueue::new(labels_encoded))
             })?,

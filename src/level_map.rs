@@ -30,10 +30,10 @@ impl<T> LevelMap<T> {
             ],
         })
     }
-    pub fn values<'a>(&'a self) -> slice::Iter<'a, T> {
+    pub fn values(&self) -> slice::Iter<'_, T> {
         self.map.iter()
     }
-    pub fn values_mut<'a>(&'a mut self) -> slice::IterMut<'a, T> {
+    pub fn values_mut(&mut self) -> slice::IterMut<'_, T> {
         self.map.iter_mut()
     }
 }
