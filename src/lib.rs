@@ -248,6 +248,26 @@ impl SendQueue {
     }
 }
 
+#[derive(Debug)]
+struct BadRedirect {
+    status: u16,
+    to: Url,
+}
+
+impl fmt::Display for BadRedirect {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // Following such a redirect drops the request body, and will likely
+        // give an HTTP 200 response even though nobody ever looked at the POST
+        // body.
+        //
+        // This can e.g. happen for login redirects when you post to a
+        // login-protected URL.
+        write!(f, "invalid HTTP {} redirect to {}", self.status, self.to)
+    }
+}
+
+impl error::Error for BadRedirect {}
+
 pub struct BackgroundTask {
     loki_url: Url,
     receiver: ReceiverStream<LokiEvent>,
@@ -297,6 +317,14 @@ impl BackgroundTask {
                     "/",
                     env!("CARGO_PKG_VERSION")
                 ))
+                .redirect(reqwest::redirect::Policy::custom(|a| {
+                    let status = a.status().as_u16();
+                    if status == 302 || status == 303 {
+                        let to = a.url().clone();
+                        return a.error(BadRedirect { status, to });
+                    }
+                    reqwest::redirect::Policy::default().redirect(a)
+                }))
                 .build()
                 .expect("reqwest client builder"),
             backoff_count: 0,
