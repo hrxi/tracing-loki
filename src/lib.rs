@@ -1,5 +1,48 @@
+//! A [`tracing`] layer for shipping logs to [Grafana
+//! Loki](https://grafana.com/oss/loki/).
+//!
+//! Usage
+//! =====
+//!
+//! ```rust
+//! use tracing_subscriber::layer::SubscriberExt;
+//! use tracing_subscriber::util::SubscriberInitExt;
+//! use url::Url;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), tracing_loki::Error> {
+//!     let (layer, task) = tracing_loki::layer(
+//!         Url::parse("http://127.0.0.1:3100").unwrap(),
+//!         vec![("host".into(), "mine".into())].into_iter().collect(),
+//!         vec![].into_iter().collect(),
+//!     )?;
+//!
+//!     // We need to register our layer with `tracing`.
+//!     tracing_subscriber::registry()
+//!         .with(layer)
+//!         // One could add more layers here, for example logging to stdout:
+//!         // .with(tracing_subscriber::fmt::Layer::new())
+//!         .init();
+//!
+//!     // The background task needs to be spawned so the logs actually get
+//!     // delivered.
+//!     tokio::spawn(task);
+//!
+//!     tracing::info!(
+//!         task = "tracing_setup",
+//!         result = "success",
+//!         "tracing successfully set up",
+//!     );
+//!
+//!     Ok(())
+//! }
+//! ```
+
 #![allow(clippy::or_fun_call)]
 #![allow(clippy::type_complexity)]
+#![deny(missing_docs)]
+
+pub extern crate url;
 
 use loki_api::logproto as loki;
 use loki_api::prost;
@@ -33,6 +76,7 @@ use tracing_subscriber::layer::Context as TracingContext;
 use tracing_subscriber::registry::LookupSpan;
 use url::Url;
 
+use ErrorInner as ErrorI;
 use level_map::LevelMap;
 use log_support::SerializeEventFieldMapStrippingLog;
 use no_subscriber::NoSubscriber;
@@ -41,16 +85,38 @@ mod level_map;
 mod log_support;
 mod no_subscriber;
 
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+struct ReadmeDoctests;
+
+/// The error type for constructing a [`Layer`].
+///
+/// Nothing except for the [`std::error::Error`] (and [`std::fmt::Debug`] and
+/// [`std::fmt::Display`]) implementation of this type is exposed.
+pub struct Error(ErrorInner);
+
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+impl error::Error for Error {}
+
 #[derive(Debug)]
-pub enum Error {
+enum ErrorInner {
     ReservedLabelLevel,
     InvalidLabelCharacter(char),
     InvalidLokiUrl,
 }
 
-impl fmt::Display for Error {
+impl fmt::Display for ErrorInner {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use self::Error::*;
+        use self::ErrorInner::*;
         match self {
             ReservedLabelLevel => write!(f, "cannot add custom label for `level`"),
             InvalidLabelCharacter(c) => write!(f, "invalid label character: {:?}", c),
@@ -58,8 +124,14 @@ impl fmt::Display for Error {
         }
     }
 }
-impl error::Error for Error {}
 
+/// Construct a [`Layer`] and its corresponding [`BackgroundTask`].
+///
+/// The [`Layer`] needs to be registered with a
+/// [`tracing_subscriber::Registry`], and the [`BackgroundTask`] needs to be
+/// [`tokio::spawn`]ed.
+///
+/// The the crate's root documentation for an example.
 pub fn layer(
     loki_url: Url,
     mut labels: HashMap<String, String>,
@@ -75,6 +147,9 @@ pub fn layer(
     ))
 }
 
+/// The [`tracing_subscriber::Layer`] implementation for the Loki backend.
+///
+/// The the crate's root documentation for an example.
 pub struct Layer {
     extra_fields: HashMap<String, String>,
     sender: mpsc::Sender<LokiEvent>,
@@ -278,6 +353,10 @@ impl fmt::Display for BadRedirect {
 
 impl error::Error for BadRedirect {}
 
+/// The background task that ships logs to Loki. It must be [`tokio::spawn`]ed
+/// by the calling application.
+///
+/// The the crate's root documentation for an example.
 pub struct BackgroundTask {
     loki_url: Url,
     receiver: ReceiverStream<LokiEvent>,
@@ -307,13 +386,13 @@ impl BackgroundTask {
         }
 
         if labels.contains_key("label") {
-            return Err(Error::ReservedLabelLevel);
+            return Err(Error(ErrorI::ReservedLabelLevel));
         }
         Ok(BackgroundTask {
             receiver: ReceiverStream::new(receiver),
             loki_url: loki_url
                 .join("/loki/api/v1/push")
-                .map_err(|_| Error::InvalidLokiUrl)?,
+                .map_err(|_| Error(ErrorI::InvalidLokiUrl))?,
             queues: LevelMap::try_from_fn(|level| {
                 labels.insert("level".into(), level_str(level).into());
                 let labels_encoded = labels_to_string(labels)?;
@@ -474,17 +553,18 @@ fn labels_to_string(labels: &HashMap<String, String>) -> Result<String, Error> {
         // Couldn't find documentation except for the promtail source code:
         // https://github.com/grafana/loki/blob/8c06c546ab15a568f255461f10318dae37e022d3/vendor/github.com/prometheus/prometheus/promql/parser/generated_parser.y#L597-L598
         //
-        // Apparently labels that confirm to yacc's "IDENTIFIER" are okay. I couldn't find which
-        // those are. Let's be conservative and allow `[A-Za-z_]*`.
+        // Apparently labels that confirm to yacc's "IDENTIFIER" are okay. I
+        // couldn't find which those are. Let's be conservative and allow
+        // `[A-Za-z_]*`.
         for (i, b) in label.bytes().enumerate() {
             match b {
                 b'A'..=b'Z' | b'a'..=b'z' | b'_' => {}
                 // The first byte outside of the above range must start a UTF-8
                 // character.
                 _ => {
-                    return Err(Error::InvalidLabelCharacter(
+                    return Err(Error(ErrorI::InvalidLabelCharacter(
                         label[i..].chars().next().unwrap(),
-                    ))
+                    )))
                 }
             }
         }

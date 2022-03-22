@@ -1,6 +1,11 @@
 [package]
 name = "loki-api"
+description = "Protobuf types used by the Grafana Loki HTTP API"
+authors = ["hrxi <hrrrxi@gmail.com>"]
+repository = "https://github.com/hrxi/tracing-loki"
+keywords = ["tracing", "loki"]
 version = "0.0.1"
+license = "MIT/Apache-2.0"
 edition = "2021"
 
 [dependencies]
