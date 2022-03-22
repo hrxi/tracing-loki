@@ -1,0 +1,7 @@
+[package]
+name = "loki-api-generate"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+prost-build = "0.9"
