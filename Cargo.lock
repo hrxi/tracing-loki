@@ -381,7 +381,7 @@ dependencies = [
 
 [[package]]
 name = "loki-api"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "prost",
  "prost-types",
@@ -976,7 +976,7 @@ dependencies = [
 
 [[package]]
 name = "tracing-loki"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "loki-api",
  "reqwest",
