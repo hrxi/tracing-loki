@@ -16,7 +16,7 @@ edition = "2021"
 
 [dependencies]
 loki-api = { version = "0.1.0", path = "loki-api" }
-reqwest = "0.11.10"
+reqwest = { version = "0.11.10", default-features = false }
 snap = "1.0.5"
 serde = { version = "1.0.136", features = ["derive"] }
 serde_json = "1.0.79"
@@ -31,3 +31,8 @@ url = "2.2.2"
 
 [dev-dependencies]
 tokio = { version = "1.17.0", features = ["macros", "rt-multi-thread"] }
+
+[features]
+rustls = ["reqwest/rustls-tls"]
+native-tls = ["reqwest/default-tls"]
+default = ["native-tls"]
