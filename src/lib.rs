@@ -380,10 +380,10 @@ impl BackgroundTask {
     ) -> Result<BackgroundTask, Error> {
         fn level_str(level: Level) -> &'static str {
             match level {
-                Level::TRACE => "debug",
-                Level::DEBUG => "informational",
-                Level::INFO => "notice",
-                Level::WARN => "warning",
+                Level::TRACE => "trace",
+                Level::DEBUG => "debug",
+                Level::INFO => "info",
+                Level::WARN => "warn",
                 Level::ERROR => "error",
             }
         }
