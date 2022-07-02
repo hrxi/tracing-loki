@@ -1,6 +1,11 @@
 Recent changes (tracing-loki)
 =============================
 
+0.2.1
+-----
+
+- Allow to select reqwest backend using feature flags by @greaka.
+
 0.2.0
 -----
 
