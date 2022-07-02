@@ -42,6 +42,12 @@
 #![allow(clippy::type_complexity)]
 #![deny(missing_docs)]
 
+#[cfg(not(feature = "compat-0-2-1"))]
+compile_error!(
+    "The feature `compat-0-2-1` must be enabled to ensure \
+    forward compatibility with future versions of this crate"
+);
+
 pub extern crate url;
 
 use loki_api::logproto as loki;
