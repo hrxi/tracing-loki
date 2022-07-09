@@ -394,7 +394,7 @@ impl BackgroundTask {
             }
         }
 
-        if labels.contains_key("label") {
+        if labels.contains_key("level") {
             return Err(Error(ErrorI::ReservedLabelLevel));
         }
         Ok(BackgroundTask {
