@@ -438,7 +438,7 @@ impl BackgroundTask {
         Ok(BackgroundTask {
             receiver: ReceiverStream::new(receiver),
             loki_url: loki_url
-                .join("/loki/api/v1/push")
+                .join("loki/api/v1/push")
                 .map_err(|_| Error(ErrorI::InvalidLokiUrl))?,
             queues: LevelMap::from_fn(|level| SendQueue::new(labels.finish(level))),
             buffer: Buffer::new(),
