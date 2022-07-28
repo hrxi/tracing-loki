@@ -52,6 +52,7 @@ pub extern crate url;
 
 use loki_api::logproto as loki;
 use loki_api::prost;
+use opentelemetry::trace::TraceContextExt;
 use serde::Serialize;
 use std::cmp;
 use std::collections::HashMap;
@@ -82,10 +83,10 @@ use tracing_subscriber::layer::Context as TracingContext;
 use tracing_subscriber::registry::LookupSpan;
 use url::Url;
 
-use ErrorInner as ErrorI;
 use level_map::LevelMap;
 use log_support::SerializeEventFieldMapStrippingLog;
 use no_subscriber::NoSubscriber;
+use ErrorInner as ErrorI;
 
 mod level_map;
 mod log_support;
@@ -181,6 +182,8 @@ struct SerializedEvent<'a> {
     _module_path: Option<&'a str>,
     _file: Option<&'a str>,
     _line: Option<u32>,
+    #[cfg(feature = "trace-id")]
+    trace_id: String,
 }
 
 #[derive(Default)]
@@ -231,12 +234,14 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             extensions.insert(fields);
         }
     }
+
     fn on_record(&self, id: &Id, values: &Record<'_>, ctx: TracingContext<'_, S>) {
         let span = ctx.span(id).expect("Span not found, this is a bug");
         let mut extensions = span.extensions_mut();
         let fields = extensions.get_mut::<Fields>().expect("unregistered span");
         values.record(fields);
     }
+
     fn on_event(&self, event: &Event<'_>, ctx: TracingContext<'_, S>) {
         let timestamp = SystemTime::now();
         let normalized_meta = event.normalized_metadata();
@@ -276,6 +281,19 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
                 _module_path: meta.module_path(),
                 _file: meta.file(),
                 _line: meta.line(),
+                #[cfg(feature = "trace-id")]
+                trace_id: {
+                    if let Some(span) = ctx.lookup_current() {
+                        let exts = span.extensions();
+                        if let Some(data) = exts.get::<tracing_opentelemetry::OtelData>() {
+                            data.parent_cx.span().span_context().trace_id().to_string()
+                        } else {
+                            "unknown".into()
+                        }
+                    } else {
+                        "unknown".into()
+                    }
+                },
             })
             .expect("json serialization shouldn't fail"),
         });
