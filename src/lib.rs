@@ -142,6 +142,7 @@ pub fn layer(
     loki_url: Url,
     mut labels: HashMap<String, String>,
     extra_fields: HashMap<String, String>,
+    tenant_id: Option<String>
 ) -> Result<(Layer, BackgroundTask), Error> {
     let (sender, receiver) = mpsc::channel(512);
     Ok((
@@ -149,7 +150,7 @@ pub fn layer(
             sender,
             extra_fields,
         },
-        BackgroundTask::new(loki_url, receiver, &mut labels)?,
+        BackgroundTask::new(loki_url, receiver, &mut labels, tenant_id)?,
     ))
 }
 
@@ -383,6 +384,7 @@ impl BackgroundTask {
         loki_url: Url,
         receiver: mpsc::Receiver<LokiEvent>,
         labels: &mut HashMap<String, String>,
+        tenant_id: Option<String>
     ) -> Result<BackgroundTask, Error> {
         fn level_str(level: Level) -> &'static str {
             match level {
@@ -397,6 +399,12 @@ impl BackgroundTask {
         if labels.contains_key("level") {
             return Err(Error(ErrorI::ReservedLabelLevel));
         }
+        // Set default headers, including auth header: X-Scope-OrgID <tenant_id> 
+        let mut default_headers = reqwest::header::HeaderMap::new();
+        default_headers.insert(
+            "X-Scope-OrgID",
+            // This is either: Some string or "" , so its safe to unwrap the result
+            reqwest::header::HeaderValue::from_str(tenant_id.unwrap_or_default().as_str()).unwrap());
         Ok(BackgroundTask {
             receiver: ReceiverStream::new(receiver),
             loki_url: loki_url
@@ -415,6 +423,7 @@ impl BackgroundTask {
                     "/",
                     env!("CARGO_PKG_VERSION")
                 ))
+                .default_headers(default_headers)
                 .redirect(reqwest::redirect::Policy::custom(|a| {
                     let status = a.status().as_u16();
                     if status == 302 || status == 303 {
