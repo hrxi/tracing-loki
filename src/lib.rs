@@ -530,6 +530,7 @@ impl Future for BackgroundTask {
                     async move {
                         request_builder
                             .header(reqwest::header::CONTENT_TYPE, "application/x-snappy")
+                            .header(String::from("X-Scope-OrgID"), "tenant1")
                             .body(body)
                             .send()
                             .await?
