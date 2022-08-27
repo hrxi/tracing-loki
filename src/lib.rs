@@ -404,8 +404,7 @@ impl BackgroundTask {
         if let Some(tenant_id) = tenant_id {
             default_headers.insert(
                 "X-Scope-OrgID",
-                // This is guarenteed to be a UTF-8 string so its safe to unwrap the result
-                // Could panic if the input is longer then the limit of HeaderValue
+                // Could panic if the input contains invisible ASCII Characters outside of range: 32-127
                 reqwest::header::HeaderValue::from_str(tenant_id.as_str()).unwrap());
         }
         Ok(BackgroundTask {

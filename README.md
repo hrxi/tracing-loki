@@ -34,6 +34,7 @@ async fn main() -> Result<(), tracing_loki::Error> {
         Url::parse("http://127.0.0.1:3100").unwrap(),
         vec![("host".into(), "mine".into())].into_iter().collect(),
         vec![].into_iter().collect(),
+        None   // Tenant id that is passed as X-Scope-OrgID Header value to support multi-tenancy if enabled
     )?;
 
     // We need to register our layer with `tracing`.

@@ -13,7 +13,7 @@ fn tracing_setup() -> Result<(), Box<dyn Error>> {
         Url::parse("http://127.0.0.1:3100").unwrap(),
         vec![("host".into(), "mine".into())].into_iter().collect(),
         vec![].into_iter().collect(),
-        Some(String::from("1"))
+        Some(String::from("tenant1"))
     )?;
     tracing_subscriber::registry()
         .with(LevelFilter::INFO)
