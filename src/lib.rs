@@ -401,10 +401,13 @@ impl BackgroundTask {
         }
         // Set default headers, including auth header: X-Scope-OrgID <tenant_id> 
         let mut default_headers = reqwest::header::HeaderMap::new();
-        default_headers.insert(
-            "X-Scope-OrgID",
-            // This is either: Some string or "" , so its safe to unwrap the result
-            reqwest::header::HeaderValue::from_str(tenant_id.unwrap_or_default().as_str()).unwrap());
+        if let Some(tenant_id) = tenant_id {
+            default_headers.insert(
+                "X-Scope-OrgID",
+                // This is guarenteed to be a UTF-8 string so its safe to unwrap the result
+                // Could panic if the input is longer then the limit of HeaderValue
+                reqwest::header::HeaderValue::from_str(tenant_id.as_str()).unwrap());
+        }
         Ok(BackgroundTask {
             receiver: ReceiverStream::new(receiver),
             loki_url: loki_url
@@ -539,7 +542,6 @@ impl Future for BackgroundTask {
                     async move {
                         request_builder
                             .header(reqwest::header::CONTENT_TYPE, "application/x-snappy")
-                            .header(String::from("X-Scope-OrgID"), "tenant1")
                             .body(body)
                             .send()
                             .await?
