@@ -244,17 +244,21 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
         let mut span_fields: serde_json::Map<String, serde_json::Value> = Default::default();
         #[cfg(opentelemetry)]
         {
+            use opentelemetry_api::trace::TraceContextExt;
             use tracing_opentelemetry::OtelData;
-            if let Some(otel) = ctx
-                .current_span()
-                .id()
-                .map(|id| ctx.span(id))
-                .flatten()
-                .map(|span| span.extensions_mut().get_mut())
-                .flatten()
-            {
-                let otel: &mut OtelData = otel;
-                span_fields.insert("traceID".into(), otel.builder.trace_id.into());
+            if let Some(span) = ctx.lookup_current() {
+                if let Some(otel) = span.extensions().get() {
+                    let otel: &OtelData = otel;
+                    span_fields.insert(
+                        "traceID".into(),
+                        otel.parent_cx
+                            .span()
+                            .span_context()
+                            .trace_id()
+                            .to_string()
+                            .into(),
+                    );
+                }
             }
         }
         let spans = ctx

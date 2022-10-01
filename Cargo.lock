@@ -1276,6 +1276,7 @@ name = "tracing-loki"
 version = "0.2.1"
 dependencies = [
  "loki-api",
+ "opentelemetry_api",
  "reqwest",
  "serde",
  "serde_json",
