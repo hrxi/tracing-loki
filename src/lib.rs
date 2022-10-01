@@ -82,10 +82,10 @@ use tracing_subscriber::layer::Context as TracingContext;
 use tracing_subscriber::registry::LookupSpan;
 use url::Url;
 
-use ErrorInner as ErrorI;
 use level_map::LevelMap;
 use log_support::SerializeEventFieldMapStrippingLog;
 use no_subscriber::NoSubscriber;
+use ErrorInner as ErrorI;
 
 mod level_map;
 mod log_support;
@@ -242,6 +242,21 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
         let normalized_meta = event.normalized_metadata();
         let meta = normalized_meta.as_ref().unwrap_or_else(|| event.metadata());
         let mut span_fields: serde_json::Map<String, serde_json::Value> = Default::default();
+        #[cfg(opentelemetry)]
+        {
+            use tracing_opentelemetry::OtelData;
+            if let Some(otel) = ctx
+                .current_span()
+                .id()
+                .map(|id| ctx.span(id))
+                .flatten()
+                .map(|span| span.extensions_mut().get_mut())
+                .flatten()
+            {
+                let otel: &mut OtelData = otel;
+                span_fields.insert("traceID".into(), otel.builder.trace_id.into());
+            }
+        }
         let spans = ctx
             .current_span()
             .id()
