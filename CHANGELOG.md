@@ -1,6 +1,15 @@
 Recent changes (tracing-loki)
 =============================
 
+0.2.2 (2023-03-08)
+------------------
+
+- Change to a builder API for configuring the logging.
+- Allow specifying paths in the Loki URL by @kellerkindt.
+- Allow setting HTTP headers for Loki requests. This allows setting a tenant ID
+  via the `X-Scope-OrgID` header. Idea and initial implementation by
+  @TheSamabo.
+
 0.2.1 (2022-07-02)
 ------------------
 
