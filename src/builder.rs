@@ -102,6 +102,10 @@ impl Builder {
     /// [`tracing_subscriber::Registry`], and the [`BackgroundTask`] needs to be
     /// [`tokio::spawn`]ed.
     ///
+    /// **Note** that unlike the [`layer`](`crate::layer`) function, this
+    /// function **does not strip off** the path component of `loki_url` before
+    /// appending `/loki/api/v1/push`.
+    ///
     /// See the crate's root documentation for an example.
     pub fn build_url(mut self, loki_url: Url) -> Result<(Layer, BackgroundTask), Error> {
         let (sender, receiver) = event_channel();

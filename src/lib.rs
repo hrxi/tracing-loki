@@ -151,6 +151,10 @@ impl fmt::Display for ErrorInner {
 /// [`tracing_subscriber::Registry`], and the [`BackgroundTask`] needs to be
 /// [`tokio::spawn`]ed.
 ///
+/// **Note** that unlike the [`Builder::build_url`] function, this function
+/// **strips off** the path component of `loki_url` before appending
+/// `/loki/api/v1/push`.
+///
 /// See [`builder()`] and this crate's root documentation for a more flexible
 /// method.
 ///
@@ -201,7 +205,7 @@ pub fn layer(
     for (key, value) in extra_fields {
         builder = builder.extra_field(key, value)?;
     }
-    builder.build_url(loki_url)
+    builder.build_url(loki_url.join("/").map_err(|_| Error(ErrorI::InvalidLokiUrl))?)
 }
 
 /// The [`tracing_subscriber::Layer`] implementation for the Loki backend.
