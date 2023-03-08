@@ -125,7 +125,10 @@ impl error::Error for Error {}
 #[derive(Debug)]
 enum ErrorInner {
     DuplicateExtraField(String),
+    DuplicateHttpHeader(String),
     DuplicateLabel(String),
+    InvalidHttpHeaderName(String),
+    InvalidHttpHeaderValue(String),
     InvalidLabelCharacter(String, char),
     InvalidLokiUrl,
     ReservedLabelLevel,
@@ -136,7 +139,10 @@ impl fmt::Display for ErrorInner {
         use self::ErrorInner::*;
         match self {
             DuplicateExtraField(key) => write!(f, "duplicate extra field key {:?}", key),
+            DuplicateHttpHeader(name) => write!(f, "duplicate HTTP header {:?}", name),
             DuplicateLabel(key) => write!(f, "duplicate label key {:?}", key),
+            InvalidHttpHeaderName(name) => write!(f, "invalid HTTP header name {:?}", name),
+            InvalidHttpHeaderValue(name) => write!(f, "invalid HTTP header value for {:?}", name),
             InvalidLabelCharacter(key, c) =>
                 write!(f, "invalid label character {:?} in key {:?}", c, key),
             InvalidLokiUrl => write!(f, "invalid Loki URL"),
@@ -436,6 +442,7 @@ pub struct BackgroundTask {
 impl BackgroundTask {
     fn new(
         loki_url: Url,
+        http_headers: reqwest::header::HeaderMap,
         receiver: mpsc::Receiver<LokiEvent>,
         labels: &FormattedLabels,
     ) -> Result<BackgroundTask, Error> {
@@ -452,6 +459,7 @@ impl BackgroundTask {
                     "/",
                     env!("CARGO_PKG_VERSION")
                 ))
+                .default_headers(http_headers)
                 .redirect(reqwest::redirect::Policy::custom(|a| {
                     let status = a.status().as_u16();
                     if status == 302 || status == 303 {
