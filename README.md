@@ -26,15 +26,15 @@ Example
 ```rust
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use std::process;
 use url::Url;
 
 #[tokio::main]
 async fn main() -> Result<(), tracing_loki::Error> {
-    let (layer, task) = tracing_loki::layer(
-        Url::parse("http://127.0.0.1:3100").unwrap(),
-        vec![("host".into(), "mine".into())].into_iter().collect(),
-        vec![].into_iter().collect(),
-    )?;
+    let (layer, task) = tracing_loki::builder()
+        .label("host", "mine")?
+        .extra_field("pid", format!("{}", process::id()))?
+        .build_url(Url::parse("http://127.0.0.1:3100").unwrap())?;
 
     // We need to register our layer with `tracing`.
     tracing_subscriber::registry()

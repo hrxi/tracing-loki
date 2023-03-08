@@ -7,15 +7,15 @@
 //! ```rust
 //! use tracing_subscriber::layer::SubscriberExt;
 //! use tracing_subscriber::util::SubscriberInitExt;
+//! use std::process;
 //! use url::Url;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), tracing_loki::Error> {
-//!     let (layer, task) = tracing_loki::layer(
-//!         Url::parse("http://127.0.0.1:3100").unwrap(),
-//!         vec![("host".into(), "mine".into())].into_iter().collect(),
-//!         vec![].into_iter().collect(),
-//!     )?;
+//!     let (layer, task) = tracing_loki::builder()
+//!         .label("host", "mine")?
+//!         .extra_field("pid", format!("{}", process::id()))?
+//!         .build_url(Url::parse("http://127.0.0.1:3100").unwrap())?;
 //!
 //!     // We need to register our layer with `tracing`.
 //!     tracing_subscriber::registry()
@@ -57,7 +57,6 @@ use std::cmp;
 use std::collections::HashMap;
 use std::error;
 use std::fmt;
-use std::fmt::Write as _;
 use std::future::Future;
 use std::mem;
 use std::pin::Pin;
@@ -83,10 +82,16 @@ use tracing_subscriber::registry::LookupSpan;
 use url::Url;
 
 use ErrorInner as ErrorI;
+use labels::FormattedLabels;
 use level_map::LevelMap;
 use log_support::SerializeEventFieldMapStrippingLog;
 use no_subscriber::NoSubscriber;
 
+pub use builder::Builder;
+pub use builder::builder;
+
+mod builder;
+mod labels;
 mod level_map;
 mod log_support;
 mod no_subscriber;
@@ -94,6 +99,10 @@ mod no_subscriber;
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
+
+fn event_channel() -> (mpsc::Sender<LokiEvent>, mpsc::Receiver<LokiEvent>) {
+    mpsc::channel(512)
+}
 
 /// The error type for constructing a [`Layer`].
 ///
@@ -115,18 +124,23 @@ impl error::Error for Error {}
 
 #[derive(Debug)]
 enum ErrorInner {
-    ReservedLabelLevel,
-    InvalidLabelCharacter(char),
+    DuplicateExtraField(String),
+    DuplicateLabel(String),
+    InvalidLabelCharacter(String, char),
     InvalidLokiUrl,
+    ReservedLabelLevel,
 }
 
 impl fmt::Display for ErrorInner {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         use self::ErrorInner::*;
         match self {
-            ReservedLabelLevel => write!(f, "cannot add custom label for `level`"),
-            InvalidLabelCharacter(c) => write!(f, "invalid label character: {:?}", c),
+            DuplicateExtraField(key) => write!(f, "duplicate extra field key {:?}", key),
+            DuplicateLabel(key) => write!(f, "duplicate label key {:?}", key),
+            InvalidLabelCharacter(key, c) =>
+                write!(f, "invalid label character {:?} in key {:?}", c, key),
             InvalidLokiUrl => write!(f, "invalid Loki URL"),
+            ReservedLabelLevel => write!(f, "cannot add custom label for \"level\""),
         }
     }
 }
@@ -137,25 +151,62 @@ impl fmt::Display for ErrorInner {
 /// [`tracing_subscriber::Registry`], and the [`BackgroundTask`] needs to be
 /// [`tokio::spawn`]ed.
 ///
-/// The the crate's root documentation for an example.
+/// See [`builder()`] and this crate's root documentation for a more flexible
+/// method.
+///
+/// # Example
+///
+/// ```rust
+/// use tracing_subscriber::layer::SubscriberExt;
+/// use tracing_subscriber::util::SubscriberInitExt;
+/// use url::Url;
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), tracing_loki::Error> {
+///     let (layer, task) = tracing_loki::layer(
+///         Url::parse("http://127.0.0.1:3100").unwrap(),
+///         vec![("host".into(), "mine".into())].into_iter().collect(),
+///         vec![].into_iter().collect(),
+///     )?;
+///
+///     // We need to register our layer with `tracing`.
+///     tracing_subscriber::registry()
+///         .with(layer)
+///         // One could add more layers here, for example logging to stdout:
+///         // .with(tracing_subscriber::fmt::Layer::new())
+///         .init();
+///
+///     // The background task needs to be spawned so the logs actually get
+///     // delivered.
+///     tokio::spawn(task);
+///
+///     tracing::info!(
+///         task = "tracing_setup",
+///         result = "success",
+///         "tracing successfully set up",
+///     );
+///
+///     Ok(())
+/// }
+/// ```
 pub fn layer(
     loki_url: Url,
-    mut labels: HashMap<String, String>,
+    labels: HashMap<String, String>,
     extra_fields: HashMap<String, String>,
 ) -> Result<(Layer, BackgroundTask), Error> {
-    let (sender, receiver) = mpsc::channel(512);
-    Ok((
-        Layer {
-            sender,
-            extra_fields,
-        },
-        BackgroundTask::new(loki_url, receiver, &mut labels)?,
-    ))
+    let mut builder = builder();
+    for (key, value) in labels {
+        builder = builder.label(key, value)?;
+    }
+    for (key, value) in extra_fields {
+        builder = builder.extra_field(key, value)?;
+    }
+    builder.build_url(loki_url)
 }
 
 /// The [`tracing_subscriber::Layer`] implementation for the Loki backend.
 ///
-/// The the crate's root documentation for an example.
+/// See the crate's root documentation for an example.
 pub struct Layer {
     extra_fields: HashMap<String, String>,
     sender: mpsc::Sender<LokiEvent>,
@@ -365,7 +416,7 @@ impl error::Error for BadRedirect {}
 /// The background task that ships logs to Loki. It must be [`tokio::spawn`]ed
 /// by the calling application.
 ///
-/// The the crate's root documentation for an example.
+/// See the crate's root documentation for an example.
 pub struct BackgroundTask {
     loki_url: Url,
     receiver: ReceiverStream<LokiEvent>,
@@ -382,32 +433,14 @@ impl BackgroundTask {
     fn new(
         loki_url: Url,
         receiver: mpsc::Receiver<LokiEvent>,
-        labels: &mut HashMap<String, String>,
+        labels: &FormattedLabels,
     ) -> Result<BackgroundTask, Error> {
-        fn level_str(level: Level) -> &'static str {
-            match level {
-                Level::TRACE => "trace",
-                Level::DEBUG => "debug",
-                Level::INFO => "info",
-                Level::WARN => "warn",
-                Level::ERROR => "error",
-            }
-        }
-
-        if labels.contains_key("level") {
-            return Err(Error(ErrorI::ReservedLabelLevel));
-        }
         Ok(BackgroundTask {
             receiver: ReceiverStream::new(receiver),
             loki_url: loki_url
                 .join("/loki/api/v1/push")
                 .map_err(|_| Error(ErrorI::InvalidLokiUrl))?,
-            queues: LevelMap::try_from_fn(|level| {
-                labels.insert("level".into(), level_str(level).into());
-                let labels_encoded = labels_to_string(labels)?;
-                labels.remove("level");
-                Ok(SendQueue::new(labels_encoded))
-            })?,
+            queues: LevelMap::from_fn(|level| SendQueue::new(labels.finish(level))),
             buffer: Buffer::new(),
             http_client: reqwest::Client::builder()
                 .user_agent(concat!(
@@ -548,40 +581,6 @@ impl Future for BackgroundTask {
             Poll::Pending
         }
     }
-}
-
-fn labels_to_string(labels: &HashMap<String, String>) -> Result<String, Error> {
-    // Couldn't find documentation except for the promtail source code:
-    // https://github.com/grafana/loki/blob/8c06c546ab15a568f255461f10318dae37e022d3/clients/pkg/promtail/client/batch.go#L61-L75
-    //
-    // Go's %q displays the string in double quotes, escaping a few characters,
-    // like Rust's {:?}.
-    let mut result = String::new();
-    result.push('{');
-    for (label, value) in labels {
-        // Couldn't find documentation except for the promtail source code:
-        // https://github.com/grafana/loki/blob/8c06c546ab15a568f255461f10318dae37e022d3/vendor/github.com/prometheus/prometheus/promql/parser/generated_parser.y#L597-L598
-        //
-        // Apparently labels that confirm to yacc's "IDENTIFIER" are okay. I
-        // couldn't find which those are. Let's be conservative and allow
-        // `[A-Za-z_]*`.
-        for (i, b) in label.bytes().enumerate() {
-            match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'_' => {}
-                // The first byte outside of the above range must start a UTF-8
-                // character.
-                _ => {
-                    return Err(Error(ErrorI::InvalidLabelCharacter(
-                        label[i..].chars().next().unwrap(),
-                    )))
-                }
-            }
-        }
-        let sep = if result.len() <= 1 { "" } else { "," };
-        write!(&mut result, "{}{}={:?}", sep, label, value).unwrap();
-    }
-    result.push('}');
-    Ok(result)
 }
 
 struct Buffer {

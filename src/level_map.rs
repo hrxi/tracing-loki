@@ -19,16 +19,16 @@ fn level_index(level: Level) -> usize {
 }
 
 impl<T> LevelMap<T> {
-    pub fn try_from_fn<E, F: FnMut(Level) -> Result<T, E>>(mut f: F) -> Result<LevelMap<T>, E> {
-        Ok(LevelMap {
+    pub fn from_fn<F: FnMut(Level) -> T>(mut f: F) -> LevelMap<T> {
+        LevelMap {
             map: [
-                f(Level::TRACE)?,
-                f(Level::DEBUG)?,
-                f(Level::INFO)?,
-                f(Level::WARN)?,
-                f(Level::ERROR)?,
+                f(Level::TRACE),
+                f(Level::DEBUG),
+                f(Level::INFO),
+                f(Level::WARN),
+                f(Level::ERROR),
             ],
-        })
+        }
     }
     pub fn values(&self) -> slice::Iter<'_, T> {
         self.map.iter()
