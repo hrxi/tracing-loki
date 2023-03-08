@@ -107,14 +107,14 @@ impl Builder {
     /// appending `/loki/api/v1/push`.
     ///
     /// See the crate's root documentation for an example.
-    pub fn build_url(mut self, loki_url: Url) -> Result<(Layer, BackgroundTask), Error> {
+    pub fn build_url(self, loki_url: Url) -> Result<(Layer, BackgroundTask), Error> {
         let (sender, receiver) = event_channel();
         Ok((
             Layer {
                 sender,
                 extra_fields: self.extra_fields,
             },
-            BackgroundTask::new(loki_url, receiver, &mut self.labels)?,
+            BackgroundTask::new(loki_url, receiver, &self.labels)?,
         ))
     }
 }
