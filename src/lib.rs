@@ -48,6 +48,9 @@ compile_error!(
     forward compatibility with future versions of this crate"
 );
 
+/// The re-exported `url` dependency of this crate.
+///
+/// Use this to avoid depending on a potentially-incompatible `url` version yourself.
 pub extern crate url;
 
 use loki_api::logproto as loki;
