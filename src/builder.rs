@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::collections::hash_map;
+use std::sync::Arc;
 use super::BackgroundTask;
 use super::Error;
 use super::ErrorI;
 use super::FormattedLabels;
 use super::Layer;
 use super::event_channel;
+use tokio::sync::Notify;
 use url::Url;
 
 /// Create a [`Builder`] for constructing a [`Layer`] and its corresponding
@@ -146,13 +148,22 @@ impl Builder {
     ///
     /// See the crate's root documentation for an example.
     pub fn build_url(self, loki_url: Url) -> Result<(Layer, BackgroundTask), Error> {
+        let quit_notify = Arc::new(Notify::new());
+        let quit_await_task = {
+            let notify = Arc::clone(&quit_notify);
+            Box::pin(async move {
+                notify.notified().await;
+            })
+        };
+
         let (sender, receiver) = event_channel();
         Ok((
             Layer {
                 sender,
                 extra_fields: self.extra_fields,
+                quit_notify,
             },
-            BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
+            BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels, Some(quit_await_task))?,
         ))
     }
 }
