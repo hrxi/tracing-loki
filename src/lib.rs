@@ -56,6 +56,7 @@ pub extern crate url;
 use loki_api::logproto as loki;
 use loki_api::prost;
 use serde::Serialize;
+use tokio::sync::Notify;
 use std::cmp;
 use std::collections::HashMap;
 use std::error;
@@ -63,6 +64,8 @@ use std::fmt;
 use std::future::Future;
 use std::mem;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::Weak;
 use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
@@ -223,6 +226,14 @@ pub fn layer(
 pub struct Layer {
     extra_fields: HashMap<String, String>,
     sender: mpsc::Sender<LokiEvent>,
+    quit_notify: Arc<Notify>,
+}
+
+impl Layer {
+    /// create shutdown handler associated with this Layer's BackgroundTask
+    pub fn create_shutdown_handler(&self) -> LayerShutdownHandler {
+        LayerShutdownHandler { quit_notify: Arc::downgrade(&self.quit_notify) }
+    }
 }
 
 struct LokiEvent {
@@ -440,6 +451,7 @@ pub struct BackgroundTask {
     backoff: Option<Pin<Box<tokio::time::Sleep>>>,
     send_task:
         Option<Pin<Box<dyn Future<Output = Result<(), Box<dyn error::Error>>> + Send + 'static>>>,
+    quit_await_task: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
 }
 
 impl BackgroundTask {
@@ -448,6 +460,7 @@ impl BackgroundTask {
         http_headers: reqwest::header::HeaderMap,
         receiver: mpsc::Receiver<LokiEvent>,
         labels: &FormattedLabels,
+        quit_await_task: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
     ) -> Result<BackgroundTask, Error> {
         Ok(BackgroundTask {
             receiver: ReceiverStream::new(receiver),
@@ -476,6 +489,7 @@ impl BackgroundTask {
             backoff_count: 0,
             backoff: None,
             send_task: None,
+            quit_await_task,
         })
     }
     fn backoff_time(&self) -> (bool, Duration) {
@@ -496,15 +510,34 @@ impl Future for BackgroundTask {
     type Output = ();
     fn poll(mut self: Pin<&mut BackgroundTask>, cx: &mut Context<'_>) -> Poll<()> {
         let mut default_guard = tracing::subscriber::set_default(NoSubscriber::default());
-        let mut receiver_done = false;
-        while let Poll::Ready(maybe_item) = Pin::new(&mut self.receiver).poll_next(cx) {
-            match maybe_item {
-                Some(item) => {
+
+        // check quit task notified
+        let quit_task_notified = if let Some(task) = &mut self.quit_await_task {
+            if task.as_mut().poll(cx).is_ready() {
+                self.quit_await_task = None;
+                true
+            } else {
+                false
+            }
+        } else {
+            true
+        };
+
+        let receiver_done = loop {
+            match Pin::new(&mut self.receiver).poll_next(cx) {
+                Poll::Ready(Some(item)) => {
                     self.queues[item.level].push(item);
                 }
-                None => receiver_done = true,
+                Poll::Ready(None) => {
+                    break true;
+                }
+                Poll::Pending => {
+                    // available data drain empty, check quit
+                    break quit_task_notified;
+                }
             }
-        }
+        };
+
         let mut backing_off = if let Some(backoff) = &mut self.backoff {
             matches!(Pin::new(backoff).poll(cx), Poll::Pending)
         } else {
@@ -625,5 +658,22 @@ impl Buffer {
             .compress(&self.encoded, &mut self.snappy)
             .expect("snappy encoding is infallible");
         &self.snappy[..snappy_len]
+    }
+}
+
+/// handler with weak reference to layer quit notify
+/// quit Layer with shutdown BackgroundTask after drain all available data in channel
+pub struct LayerShutdownHandler {
+    quit_notify: Weak<Notify>,
+}
+
+impl LayerShutdownHandler {
+    /// shutdown associated Layer's BackgroundTask
+    pub fn shutdown(&self) {
+        if let Some(quit_notify) = self.quit_notify.upgrade() {
+            // use notify_one, cause we have only one BackgroundTask
+            // and notify_one will add a permit, avoid time-sequence-bug
+            quit_notify.notify_one();
+        }
     }
 }
