@@ -513,9 +513,7 @@ impl Future for BackgroundTask {
         if !backing_off {
             self.backoff = None;
         }
-        let mut send_task_done;
         loop {
-            send_task_done = false;
             if let Some(send_task) = &mut self.send_task {
                 match Pin::new(send_task).poll(cx) {
                     Poll::Ready(res) => {
@@ -551,13 +549,10 @@ impl Future for BackgroundTask {
                         for q in self.queues.values_mut() {
                             q.on_send_result(res);
                         }
-                        send_task_done = true;
+                        self.send_task = None;
                     }
                     Poll::Pending => {}
                 }
-            }
-            if send_task_done {
-                self.send_task = None;
             }
             if self.send_task.is_none()
                 && !backing_off
@@ -590,7 +585,7 @@ impl Future for BackgroundTask {
                 break;
             }
         }
-        if receiver_done && send_task_done {
+        if receiver_done && self.send_task.is_none() {
             Poll::Ready(())
         } else {
             Poll::Pending
