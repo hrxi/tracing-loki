@@ -56,7 +56,6 @@ pub extern crate url;
 use loki_api::logproto as loki;
 use loki_api::prost;
 use serde::Serialize;
-use tokio::sync::Notify;
 use std::cmp;
 use std::collections::HashMap;
 use std::error;
@@ -64,8 +63,6 @@ use std::fmt;
 use std::future::Future;
 use std::mem;
 use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::Weak;
 use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
@@ -106,7 +103,7 @@ mod no_subscriber;
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
 
-fn event_channel() -> (mpsc::Sender<LokiEvent>, mpsc::Receiver<LokiEvent>) {
+fn event_channel() -> (mpsc::Sender<Option<LokiEvent>>, mpsc::Receiver<Option<LokiEvent>>) {
     mpsc::channel(512)
 }
 
@@ -225,15 +222,7 @@ pub fn layer(
 /// See the crate's root documentation for an example.
 pub struct Layer {
     extra_fields: HashMap<String, String>,
-    sender: mpsc::Sender<LokiEvent>,
-    quit_notify: Arc<Notify>,
-}
-
-impl Layer {
-    /// create shutdown handler associated with this Layer's BackgroundTask
-    pub fn create_shutdown_handler(&self) -> LayerShutdownHandler {
-        LayerShutdownHandler { quit_notify: Arc::downgrade(&self.quit_notify) }
-    }
+    sender: mpsc::Sender<Option<LokiEvent>>,
 }
 
 struct LokiEvent {
@@ -338,7 +327,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             })
             .unwrap_or(Vec::new());
         // TODO: Anything useful to do when the capacity has been reached?
-        let _ = self.sender.try_send(LokiEvent {
+        let _ = self.sender.try_send(Some(LokiEvent {
             trigger_send: !meta.target().starts_with("tracing_loki"),
             timestamp,
             level: *meta.level(),
@@ -353,7 +342,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
                 _line: meta.line(),
             })
             .expect("json serialization shouldn't fail"),
-        });
+        }));
     }
 }
 
@@ -443,24 +432,23 @@ impl error::Error for BadRedirect {}
 /// See the crate's root documentation for an example.
 pub struct BackgroundTask {
     loki_url: Url,
-    receiver: ReceiverStream<LokiEvent>,
+    receiver: ReceiverStream<Option<LokiEvent>>,
     queues: LevelMap<SendQueue>,
     buffer: Buffer,
     http_client: reqwest::Client,
     backoff_count: u32,
     backoff: Option<Pin<Box<tokio::time::Sleep>>>,
+    quitting: bool,
     send_task:
         Option<Pin<Box<dyn Future<Output = Result<(), Box<dyn error::Error>>> + Send + 'static>>>,
-    quit_await_task: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
 }
 
 impl BackgroundTask {
     fn new(
         loki_url: Url,
         http_headers: reqwest::header::HeaderMap,
-        receiver: mpsc::Receiver<LokiEvent>,
+        receiver: mpsc::Receiver<Option<LokiEvent>>,
         labels: &FormattedLabels,
-        quit_await_task: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
     ) -> Result<BackgroundTask, Error> {
         Ok(BackgroundTask {
             receiver: ReceiverStream::new(receiver),
@@ -488,8 +476,8 @@ impl BackgroundTask {
                 .expect("reqwest client builder"),
             backoff_count: 0,
             backoff: None,
+            quitting: false,
             send_task: None,
-            quit_await_task,
         })
     }
     fn backoff_time(&self) -> (bool, Duration) {
@@ -511,32 +499,13 @@ impl Future for BackgroundTask {
     fn poll(mut self: Pin<&mut BackgroundTask>, cx: &mut Context<'_>) -> Poll<()> {
         let mut default_guard = tracing::subscriber::set_default(NoSubscriber::default());
 
-        // check quit task notified
-        let quit_task_notified = if let Some(task) = &mut self.quit_await_task {
-            if task.as_mut().poll(cx).is_ready() {
-                self.quit_await_task = None;
-                true
-            } else {
-                false
+        while let Poll::Ready(maybe_maybe_item) = Pin::new(&mut self.receiver).poll_next(cx) {
+            match maybe_maybe_item {
+                Some(Some(item)) => self.queues[item.level].push(item),
+                Some(None) => self.quitting = true, // Explicit close.
+                None => self.quitting = true, // The sender was dropped.
             }
-        } else {
-            true
-        };
-
-        let receiver_done = loop {
-            match Pin::new(&mut self.receiver).poll_next(cx) {
-                Poll::Ready(Some(item)) => {
-                    self.queues[item.level].push(item);
-                }
-                Poll::Ready(None) => {
-                    break true;
-                }
-                Poll::Pending => {
-                    // available data drain empty, check quit
-                    break quit_task_notified;
-                }
-            }
-        };
+        }
 
         let mut backing_off = if let Some(backoff) = &mut self.backoff {
             matches!(Pin::new(backoff).poll(cx), Poll::Pending)
@@ -618,7 +587,7 @@ impl Future for BackgroundTask {
                 break;
             }
         }
-        if receiver_done && self.send_task.is_none() {
+        if self.quitting && self.send_task.is_none() {
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -661,19 +630,17 @@ impl Buffer {
     }
 }
 
-/// handler with weak reference to layer quit notify
-/// quit Layer with shutdown BackgroundTask after drain all available data in channel
-pub struct LayerShutdownHandler {
-    quit_notify: Weak<Notify>,
+/// Handle to cleanly shut down the `BackgroundTask`.
+///
+/// It'll still try to send all available data and then quit.
+pub struct BackgroundTaskController {
+    sender: mpsc::Sender<Option<LokiEvent>>,
 }
 
-impl LayerShutdownHandler {
-    /// shutdown associated Layer's BackgroundTask
-    pub fn shutdown(&self) {
-        if let Some(quit_notify) = self.quit_notify.upgrade() {
-            // use notify_one, cause we have only one BackgroundTask
-            // and notify_one will add a permit, avoid time-sequence-bug
-            quit_notify.notify_one();
-        }
+impl BackgroundTaskController {
+    /// Shut down the associated `BackgroundTask`.
+    pub async fn shutdown(&self) {
+        // Ignore the error. If no one is listening, it already shut down.
+        let _ = self.sender.send(None).await;
     }
 }
