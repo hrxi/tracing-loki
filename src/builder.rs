@@ -1,13 +1,12 @@
 use std::collections::HashMap;
 use std::collections::hash_map;
-use std::sync::Arc;
 use super::BackgroundTask;
+use super::BackgroundTaskController;
 use super::Error;
 use super::ErrorI;
 use super::FormattedLabels;
 use super::Layer;
 use super::event_channel;
-use tokio::sync::Notify;
 use url::Url;
 
 /// Create a [`Builder`] for constructing a [`Layer`] and its corresponding
@@ -136,11 +135,12 @@ impl Builder {
     }
     /// Build the tracing [`Layer`] and its corresponding [`BackgroundTask`].
     ///
-    /// The `loki_url` is the URL of the Loki server, like `https://127.0.0.1:3100`.
+    /// The `loki_url` is the URL of the Loki server, like
+    /// `https://127.0.0.1:3100`.
     ///
     /// The [`Layer`] needs to be registered with a
-    /// [`tracing_subscriber::Registry`], and the [`BackgroundTask`] needs to be
-    /// [`tokio::spawn`]ed.
+    /// [`tracing_subscriber::Registry`], and the [`BackgroundTask`] needs to
+    /// be [`tokio::spawn`]ed.
     ///
     /// **Note** that unlike the [`layer`](`crate::layer`) function, this
     /// function **does not strip off** the path component of `loki_url` before
@@ -148,22 +148,46 @@ impl Builder {
     ///
     /// See the crate's root documentation for an example.
     pub fn build_url(self, loki_url: Url) -> Result<(Layer, BackgroundTask), Error> {
-        let quit_notify = Arc::new(Notify::new());
-        let quit_await_task = {
-            let notify = Arc::clone(&quit_notify);
-            Box::pin(async move {
-                notify.notified().await;
-            })
-        };
-
         let (sender, receiver) = event_channel();
         Ok((
             Layer {
                 sender,
                 extra_fields: self.extra_fields,
-                quit_notify,
             },
-            BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels, Some(quit_await_task))?,
+            BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
+        ))
+    }
+    /// Build the tracing [`Layer`], [`BackgroundTask`] and its
+    /// [`BackgroundTaskController`].
+    ///
+    /// The [`BackgroundTaskController`] can be used to signal the background
+    /// task to shut down.
+    ///
+    /// The `loki_url` is the URL of the Loki server, like
+    /// `https://127.0.0.1:3100`.
+    ///
+    /// The [`Layer`] needs to be registered with a
+    /// [`tracing_subscriber::Registry`], and the [`BackgroundTask`] needs to
+    /// be [`tokio::spawn`]ed.
+    ///
+    /// **Note** that unlike the [`layer`](`crate::layer`) function, this
+    /// function **does not strip off** the path component of `loki_url` before
+    /// appending `/loki/api/v1/push`.
+    ///
+    /// See the crate's root documentation for an example.
+    pub fn build_controller_url(self, loki_url: Url)
+        -> Result<(Layer, BackgroundTaskController, BackgroundTask), Error>
+    {
+        let (sender, receiver) = event_channel();
+        Ok((
+            Layer {
+                sender: sender.clone(),
+                extra_fields: self.extra_fields,
+            },
+            BackgroundTaskController {
+                sender,
+            },
+            BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
         ))
     }
 }
