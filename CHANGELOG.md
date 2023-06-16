@@ -1,6 +1,12 @@
 Recent changes (tracing-loki)
 =============================
 
+0.2.3 (2023-06-16)
+------------------
+
+- Allow clean shutdown using the `BackgroundTaskController` obtained from
+  `Builder::build_controller_url`. Check `examples/shutdown.rs` for an example.
+
 0.2.2 (2023-03-08)
 ------------------
 
