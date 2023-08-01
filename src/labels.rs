@@ -78,11 +78,26 @@ mod test {
 
     #[test]
     fn simple() {
-        assert_eq!(FormattedLabels::new().finish(Level::TRACE), r#"{level="trace"}"#);
-        assert_eq!(FormattedLabels::new().finish(Level::DEBUG), r#"{level="debug"}"#);
-        assert_eq!(FormattedLabels::new().finish(Level::INFO), r#"{level="info"}"#);
-        assert_eq!(FormattedLabels::new().finish(Level::WARN), r#"{level="warn"}"#);
-        assert_eq!(FormattedLabels::new().finish(Level::ERROR), r#"{level="error"}"#);
+        assert_eq!(
+            FormattedLabels::new().finish(Level::TRACE),
+            r#"{level="trace"}"#,
+        );
+        assert_eq!(
+            FormattedLabels::new().finish(Level::DEBUG),
+            r#"{level="debug"}"#,
+        );
+        assert_eq!(
+            FormattedLabels::new().finish(Level::INFO),
+            r#"{level="info"}"#,
+        );
+        assert_eq!(
+            FormattedLabels::new().finish(Level::WARN),
+            r#"{level="warn"}"#,
+        );
+        assert_eq!(
+            FormattedLabels::new().finish(Level::ERROR),
+            r#"{level="error"}"#,
+        );
     }
 
     #[test]

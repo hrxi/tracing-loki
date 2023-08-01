@@ -8,7 +8,8 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use url::Url;
 
-fn tracing_setup() -> Result<(tracing_loki::BackgroundTaskController, JoinHandle<()>), Box<dyn Error>> {
+fn tracing_setup(
+) -> Result<(tracing_loki::BackgroundTaskController, JoinHandle<()>), Box<dyn Error>> {
     let (layer, controller, task) = tracing_loki::builder()
         .label("host", "mine")?
         .build_controller_url(Url::parse("http://127.0.0.1:3100").unwrap())?;

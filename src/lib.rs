@@ -84,14 +84,14 @@ use tracing_subscriber::layer::Context as TracingContext;
 use tracing_subscriber::registry::LookupSpan;
 use url::Url;
 
-use ErrorInner as ErrorI;
 use labels::FormattedLabels;
 use level_map::LevelMap;
 use log_support::SerializeEventFieldMapStrippingLog;
 use no_subscriber::NoSubscriber;
+use ErrorInner as ErrorI;
 
-pub use builder::Builder;
 pub use builder::builder;
+pub use builder::Builder;
 
 mod builder;
 mod labels;
@@ -103,7 +103,10 @@ mod no_subscriber;
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
 
-fn event_channel() -> (mpsc::Sender<Option<LokiEvent>>, mpsc::Receiver<Option<LokiEvent>>) {
+fn event_channel() -> (
+    mpsc::Sender<Option<LokiEvent>>,
+    mpsc::Receiver<Option<LokiEvent>>,
+) {
     mpsc::channel(512)
 }
 
@@ -146,8 +149,9 @@ impl fmt::Display for ErrorInner {
             DuplicateLabel(key) => write!(f, "duplicate label key {:?}", key),
             InvalidHttpHeaderName(name) => write!(f, "invalid HTTP header name {:?}", name),
             InvalidHttpHeaderValue(name) => write!(f, "invalid HTTP header value for {:?}", name),
-            InvalidLabelCharacter(key, c) =>
-                write!(f, "invalid label character {:?} in key {:?}", c, key),
+            InvalidLabelCharacter(key, c) => {
+                write!(f, "invalid label character {:?} in key {:?}", c, key)
+            }
             InvalidLokiUrl => write!(f, "invalid Loki URL"),
             ReservedLabelLevel => write!(f, "cannot add custom label for \"level\""),
         }
@@ -214,7 +218,11 @@ pub fn layer(
     for (key, value) in extra_fields {
         builder = builder.extra_field(key, value)?;
     }
-    builder.build_url(loki_url.join("/").map_err(|_| Error(ErrorI::InvalidLokiUrl))?)
+    builder.build_url(
+        loki_url
+            .join("/")
+            .map_err(|_| Error(ErrorI::InvalidLokiUrl))?,
+    )
 }
 
 /// The [`tracing_subscriber::Layer`] implementation for the Loki backend.
@@ -504,7 +512,7 @@ impl Future for BackgroundTask {
             match maybe_maybe_item {
                 Some(Some(item)) => self.queues[item.level].push(item),
                 Some(None) => self.quitting = true, // Explicit close.
-                None => self.quitting = true, // The sender was dropped.
+                None => self.quitting = true,       // The sender was dropped.
             }
         }
 
