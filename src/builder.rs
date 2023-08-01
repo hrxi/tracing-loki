@@ -1,12 +1,12 @@
-use std::collections::HashMap;
-use std::collections::hash_map;
+use super::event_channel;
 use super::BackgroundTask;
 use super::BackgroundTaskController;
 use super::Error;
 use super::ErrorI;
 use super::FormattedLabels;
 use super::Layer;
-use super::event_channel;
+use std::collections::hash_map;
+use std::collections::HashMap;
 use url::Url;
 
 /// Create a [`Builder`] for constructing a [`Layer`] and its corresponding
@@ -65,9 +65,11 @@ impl Builder {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn label<S: Into<String>, T: AsRef<str>>(mut self, key: S, value: T)
-        -> Result<Builder, Error>
-    {
+    pub fn label<S: Into<String>, T: AsRef<str>>(
+        mut self,
+        key: S,
+        value: T,
+    ) -> Result<Builder, Error> {
         self.labels.add(key.into(), value.as_ref())?;
         Ok(self)
     }
@@ -89,16 +91,18 @@ impl Builder {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn extra_field<S: Into<String>, T: Into<String>>(mut self, key: S, value: T)
-        -> Result<Builder, Error>
-    {
+    pub fn extra_field<S: Into<String>, T: Into<String>>(
+        mut self,
+        key: S,
+        value: T,
+    ) -> Result<Builder, Error> {
         match self.extra_fields.entry(key.into()) {
             hash_map::Entry::Occupied(o) => {
                 return Err(Error(ErrorI::DuplicateExtraField(o.key().clone())));
-            },
+            }
             hash_map::Entry::Vacant(v) => {
                 v.insert(value.into());
-            },
+            }
         }
         Ok(self)
     }
@@ -118,17 +122,23 @@ impl Builder {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn http_header<S: AsRef<str>, T: AsRef<str>>(mut self, key: S, value: T)
-        -> Result<Builder, Error>
-    {
+    pub fn http_header<S: AsRef<str>, T: AsRef<str>>(
+        mut self,
+        key: S,
+        value: T,
+    ) -> Result<Builder, Error> {
         let key = key.as_ref();
         let value = value.as_ref();
-        if self.http_headers.insert(
-            reqwest::header::HeaderName::from_bytes(key.as_bytes())
-                .map_err(|_| Error(ErrorI::InvalidHttpHeaderName(key.into())))?,
-            reqwest::header::HeaderValue::from_str(value)
-                .map_err(|_| Error(ErrorI::InvalidHttpHeaderValue(key.into())))?,
-        ).is_some() {
+        if self
+            .http_headers
+            .insert(
+                reqwest::header::HeaderName::from_bytes(key.as_bytes())
+                    .map_err(|_| Error(ErrorI::InvalidHttpHeaderName(key.into())))?,
+                reqwest::header::HeaderValue::from_str(value)
+                    .map_err(|_| Error(ErrorI::InvalidHttpHeaderValue(key.into())))?,
+            )
+            .is_some()
+        {
             return Err(Error(ErrorI::DuplicateHttpHeader(key.into())));
         }
         Ok(self)
@@ -175,18 +185,17 @@ impl Builder {
     /// appending `/loki/api/v1/push`.
     ///
     /// See the crate's root documentation for an example.
-    pub fn build_controller_url(self, loki_url: Url)
-        -> Result<(Layer, BackgroundTaskController, BackgroundTask), Error>
-    {
+    pub fn build_controller_url(
+        self,
+        loki_url: Url,
+    ) -> Result<(Layer, BackgroundTaskController, BackgroundTask), Error> {
         let (sender, receiver) = event_channel();
         Ok((
             Layer {
                 sender: sender.clone(),
                 extra_fields: self.extra_fields,
             },
-            BackgroundTaskController {
-                sender,
-            },
+            BackgroundTaskController { sender },
             BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
         ))
     }
