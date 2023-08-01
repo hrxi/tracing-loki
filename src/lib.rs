@@ -306,11 +306,12 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
         let normalized_meta = event.normalized_metadata();
         let meta = normalized_meta.as_ref().unwrap_or_else(|| event.metadata());
         let mut span_fields: serde_json::Map<String, serde_json::Value> = Default::default();
-        let spans = ctx
-            .current_span()
-            .id()
+        let spans = event
+            .parent()
+            .cloned()
+            .or_else(|| ctx.current_span().id().cloned())
             .and_then(|id| {
-                ctx.span_scope(id).map(|scope| {
+                ctx.span_scope(&id).map(|scope| {
                     scope.from_root().fold(Vec::new(), |mut spans, span| {
                         span_fields.extend(
                             span.extensions()
