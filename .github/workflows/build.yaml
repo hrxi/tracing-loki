@@ -27,6 +27,8 @@ jobs:
           profile: minimal
           toolchain: ${{ matrix.rust }}
           override: true
+      - if: ${{ matrix.rust == 'stable' }}
+        run: cargo fmt -- --color=always --check
       - run: cargo build
       - run: cargo test
       - run: cargo bench
