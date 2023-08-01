@@ -1,6 +1,11 @@
 Recent changes (tracing-loki)
 =============================
 
+0.2.4 (2023-08-01)
+------------------
+
+- Use explicitly specified `parent` for events by @gdesmott.
+
 0.2.3 (2023-06-16)
 ------------------
 
