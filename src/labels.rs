@@ -1,8 +1,12 @@
 use std::collections::HashSet;
-use std::collections::HashMap;
 use std::fmt::Write as _;
 use tracing_core::Level;
+
+#[allow(unused)]
 use tracing_core::field::Visit;
+
+#[allow(unused)]
+use std::collections::HashMap;
 
 use super::Error;
 use super::ErrorI;
@@ -39,9 +43,13 @@ impl FormattedLabels {
         }
         Ok(())
     }
+    
+    #[cfg(feature = "dynamic-labels")]
     pub fn contains(&self, ValidatedLabel(key): &ValidatedLabel) -> bool {
         self.seen_keys.contains(key)
     }
+
+    #[cfg(feature = "dynamic-labels")]
     /// Join with another set of labels that are already formatted.
     /// Does not check that the other labels are valid or that they don't contain duplicates
     /// including with the current set of labels. That is checked by the builder.
@@ -103,12 +111,14 @@ impl ValidatedLabel {
     }
 }
 
+#[cfg(feature = "dynamic-labels")]
 #[derive(Clone)]
 pub struct LabelSelectorVisitor<'a> {
     select_keys: &'a HashMap<String, ValidatedLabel>,
     found_labels: Vec<(ValidatedLabel, String)>
 }
 
+#[cfg(feature = "dynamic-labels")]
 impl<'a> LabelSelectorVisitor<'a> {
     pub fn new(select_keys: &'a HashMap<String, ValidatedLabel>) -> Self {
         Self {
@@ -130,6 +140,7 @@ impl<'a> LabelSelectorVisitor<'a> {
     }
 }
 
+#[cfg(feature = "dynamic-labels")]
 impl<'a> Visit for LabelSelectorVisitor<'a> {
     fn record_debug(&mut self, field: &tracing_core::Field, value: &dyn std::fmt::Debug) {
         if let Some(validated) = self.select_keys.get(field.name()) {

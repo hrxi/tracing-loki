@@ -77,16 +77,16 @@ use tracing_core::span::Attributes;
 use tracing_core::span::Id;
 use tracing_core::span::Record;
 use tracing_core::Event;
-#[allow(unused)]
-use tracing_core::Level;
 use tracing_core::Subscriber;
 use tracing_log::NormalizeEvent;
 use tracing_subscriber::layer::Context as TracingContext;
 use tracing_subscriber::registry::LookupSpan;
 use url::Url;
 
+#[allow(unused)]
+use tracing_core::Level;
+
 use labels::FormattedLabels;
-use labels::LabelSelectorVisitor;
 use labels::ValidatedLabel;
 use log_support::SerializeEventFieldMapStrippingLogAndKeys;
 use no_subscriber::NoSubscriber;
@@ -97,6 +97,9 @@ use level_map::LevelMap;
 
 #[cfg(feature = "dynamic-labels")]
 use label_map::LabelMap;
+
+#[cfg(feature = "dynamic-labels")]
+use labels::LabelSelectorVisitor;
 
 pub use builder::builder;
 pub use builder::Builder;
@@ -481,7 +484,9 @@ pub struct BackgroundTask {
     #[cfg(feature = "dynamic-labels")]
     label_queues: LabelMap<SendQueue>,
 
+    #[cfg(feature = "dynamic-labels")]
     base_labels: FormattedLabels,
+
     buffer: Buffer,
     http_client: reqwest::Client,
     backoff_count: u32,
@@ -510,7 +515,9 @@ impl BackgroundTask {
             #[cfg(feature = "dynamic-labels")]
             label_queues: LabelMap::new(),
 
+            #[cfg(feature = "dynamic-labels")]
             base_labels: labels.clone(),
+
             buffer: Buffer::new(),
             http_client: reqwest::Client::builder()
                 .user_agent(concat!(
@@ -550,7 +557,7 @@ impl BackgroundTask {
     /// Takes mut event for perfomance reasons - taking the label out of it
     fn get_queue_for_event<'a>(&'a mut self, event: &LokiEvent) -> &'a mut SendQueue {
         #[cfg(not(feature = "dynamic-labels"))]
-        let queue = self.level_queues[event.level];
+        let queue = &mut self.level_queues[event.level];
 
         #[cfg(feature = "dynamic-labels")]
         let queue = {
