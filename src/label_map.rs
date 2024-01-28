@@ -13,10 +13,15 @@ impl<T> LabelMap<T> {
         }
     }
 
-    pub fn get_or_insert(&mut self, key: String, builder: impl FnOnce() -> T) -> &mut T {
-        // Due to borrow checker limitations around &mut, this has to accept a String
-        // instead of a &str. I tried.
-        self.map.entry(key).or_insert_with(builder)
+    pub fn get_or_insert(&mut self, key: &str, builder: impl FnOnce() -> T) -> &mut T {
+        // Due to borrow checker limitations around &mut, this has to either accept a cloned String
+        // or do a double lookup, which is what we do here, with the expectation that it
+        // ends up better than the allocation.
+        if !self.map.contains_key(key) {
+            self.map.insert(key.to_owned(), builder());
+        }
+
+        self.map.get_mut(key).unwrap()
     }
 
     pub fn values(&self) -> hash_map::Values<'_, String, T> {

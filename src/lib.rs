@@ -548,18 +548,19 @@ impl BackgroundTask {
         )
     }
     /// Takes mut event for perfomance reasons - taking the label out of it
-    fn get_queue_for_event<'a>(&'a mut self, event: &mut LokiEvent) -> &'a mut SendQueue {
+    fn get_queue_for_event<'a>(&'a mut self, event: &LokiEvent) -> &'a mut SendQueue {
         #[cfg(not(feature = "dynamic_labels"))]
         let queue = self.level_queues[event.level];
 
         #[cfg(feature = "dynamic_labels")]
         let queue = {
-            let joined_labels = self
-                .base_labels
-                .clone()
-                .join_with_finished(mem::take(&mut event.formatted_labels));
-            self.label_queues
-                .get_or_insert(joined_labels.clone(), || SendQueue::new(joined_labels))
+            self.label_queues.get_or_insert(&event.formatted_labels, || {
+                let joined_labels = self
+                    .base_labels
+                    .clone()
+                    .join_with_finished(event.formatted_labels.clone());
+                SendQueue::new(joined_labels)
+            })
         };
 
         queue
@@ -591,7 +592,7 @@ impl Future for BackgroundTask {
 
         while let Poll::Ready(maybe_maybe_item) = Pin::new(&mut self.receiver).poll_next(cx) {
             match maybe_maybe_item {
-                Some(Some(mut item)) => self.get_queue_for_event(&mut item).push(item),
+                Some(Some(item)) => self.get_queue_for_event(&item).push(item),
                 Some(None) => self.quitting = true, // Explicit close.
                 None => self.quitting = true,       // The sender was dropped.
             }
