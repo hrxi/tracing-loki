@@ -561,13 +561,14 @@ impl BackgroundTask {
 
         #[cfg(feature = "dynamic-labels")]
         let queue = {
-            self.label_queues.get_or_insert(&event.formatted_labels, || {
-                let joined_labels = self
-                    .base_labels
-                    .clone()
-                    .join_with_finished(event.formatted_labels.clone());
-                SendQueue::new(joined_labels)
-            })
+            self.label_queues
+                .get_or_insert(&event.formatted_labels, || {
+                    let joined_labels = self
+                        .base_labels
+                        .clone()
+                        .join_with_finished(event.formatted_labels.clone());
+                    SendQueue::new(joined_labels)
+                })
         };
 
         queue
@@ -654,10 +655,7 @@ impl Future for BackgroundTask {
                     Poll::Pending => {}
                 }
             }
-            if self.send_task.is_none()
-                && !backing_off
-                && self.queues().any(|q| q.should_send())
-            {
+            if self.send_task.is_none() && !backing_off && self.queues().any(|q| q.should_send()) {
                 let streams = self
                     .queues_mut()
                     .map(|q| q.prepare_sending())

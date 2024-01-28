@@ -11,7 +11,10 @@ use tracing_serde::SerdeMapVisitor;
 
 use crate::labels::ValidatedLabel;
 
-pub struct SerializeEventFieldMapStrippingLogAndKeys<'a>(pub &'a Event<'a>, pub&'a HashMap<String, ValidatedLabel>);
+pub struct SerializeEventFieldMapStrippingLogAndKeys<'a>(
+    pub &'a Event<'a>,
+    pub &'a HashMap<String, ValidatedLabel>,
+);
 
 impl<'a> Serialize for SerializeEventFieldMapStrippingLogAndKeys<'a> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -23,7 +26,10 @@ impl<'a> Serialize for SerializeEventFieldMapStrippingLogAndKeys<'a> {
     }
 }
 
-struct SerdeMapVisitorStrippingLogAndKeys<'a, S: SerializeMap>(SerdeMapVisitor<S>, &'a HashMap<String, ValidatedLabel>);
+struct SerdeMapVisitorStrippingLogAndKeys<'a, S: SerializeMap>(
+    SerdeMapVisitor<S>,
+    &'a HashMap<String, ValidatedLabel>,
+);
 
 impl<'a, S: SerializeMap> SerdeMapVisitorStrippingLogAndKeys<'a, S> {
     fn new(serializer: S, strip_keys: &'a HashMap<String, ValidatedLabel>) -> Self {

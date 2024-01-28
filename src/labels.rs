@@ -43,7 +43,7 @@ impl FormattedLabels {
         }
         Ok(())
     }
-    
+
     #[cfg(feature = "dynamic-labels")]
     pub fn contains(&self, ValidatedLabel(key): &ValidatedLabel) -> bool {
         self.seen_keys.contains(key)
@@ -115,7 +115,7 @@ impl ValidatedLabel {
 #[derive(Clone)]
 pub struct LabelSelectorVisitor<'a> {
     select_keys: &'a HashMap<String, ValidatedLabel>,
-    found_labels: Vec<(ValidatedLabel, String)>
+    found_labels: Vec<(ValidatedLabel, String)>,
 }
 
 #[cfg(feature = "dynamic-labels")]
@@ -132,7 +132,7 @@ impl<'a> LabelSelectorVisitor<'a> {
         let mut labels = FormattedLabels::new();
         for (key, value) in self.found_labels {
             match labels.add(key.to_owned(), &value) {
-                Ok(()) | Err(Error(ErrorI::DuplicateLabel(_))) => (),   // Ignore duplicate labels.
+                Ok(()) | Err(Error(ErrorI::DuplicateLabel(_))) => (), // Ignore duplicate labels.
                 Err(e) => panic!("Unexpected error: {:?}", e),
             }
         }
@@ -144,7 +144,8 @@ impl<'a> LabelSelectorVisitor<'a> {
 impl<'a> Visit for LabelSelectorVisitor<'a> {
     fn record_debug(&mut self, field: &tracing_core::Field, value: &dyn std::fmt::Debug) {
         if let Some(validated) = self.select_keys.get(field.name()) {
-            self.found_labels.push((validated.clone(), format!("{:?}", value)));
+            self.found_labels
+                .push((validated.clone(), format!("{:?}", value)));
         }
     }
 
@@ -152,7 +153,8 @@ impl<'a> Visit for LabelSelectorVisitor<'a> {
         // Overriding this to avoid using the debug implementation that would escape + add quotes twice
         // (including the final formatting).
         if let Some(validated) = self.select_keys.get(field.name()) {
-            self.found_labels.push((validated.clone(), value.to_owned()));
+            self.found_labels
+                .push((validated.clone(), value.to_owned()));
         }
     }
 }

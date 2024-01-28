@@ -169,7 +169,7 @@ impl Builder {
     /// For open categories, simple fields are a better fit. If you don't register
     /// your tracing fields as dynamic labels using this method,
     /// they will be sent as simple fields.
-    /// 
+    ///
     /// # Example
     ///
     /// ```
