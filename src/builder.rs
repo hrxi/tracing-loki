@@ -76,7 +76,7 @@ impl Builder {
     ) -> Result<Builder, Error> {
         let label = ValidatedLabel::new(key.into())?;
 
-        #[cfg(feature = "dynamic_labels")]
+        #[cfg(feature = "dynamic-labels")]
         if self.dynamic_labels.contains(&label) {
             return Err(Error(ErrorI::DuplicateLabel(label.inner().to_owned())));
         }
@@ -154,7 +154,7 @@ impl Builder {
         }
         Ok(self)
     }
-    #[cfg(feature = "dynamic_labels")]
+    #[cfg(feature = "dynamic-labels")]
     /// Add a dynamic label to the logs sent to Loki through the built `Layer`.
     /// When a tracing field with the same name is present in an event, its value will be
     /// sent as a label, instead of a field.

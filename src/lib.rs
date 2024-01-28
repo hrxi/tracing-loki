@@ -92,10 +92,10 @@ use log_support::SerializeEventFieldMapStrippingLogAndKeys;
 use no_subscriber::NoSubscriber;
 use ErrorInner as ErrorI;
 
-#[cfg(not(feature = "dynamic_labels"))]
+#[cfg(not(feature = "dynamic-labels"))]
 use level_map::LevelMap;
 
-#[cfg(feature = "dynamic_labels")]
+#[cfg(feature = "dynamic-labels")]
 use label_map::LabelMap;
 
 pub use builder::builder;
@@ -106,10 +106,10 @@ mod labels;
 mod log_support;
 mod no_subscriber;
 
-#[cfg(not(feature = "dynamic_labels"))]
+#[cfg(not(feature = "dynamic-labels"))]
 mod level_map;
 
-#[cfg(feature = "dynamic_labels")]
+#[cfg(feature = "dynamic-labels")]
 mod label_map;
 
 #[cfg(doctest)]
@@ -252,10 +252,10 @@ struct LokiEvent {
     timestamp: SystemTime,
     message: String,
 
-    #[cfg(not(feature = "dynamic_labels"))]
+    #[cfg(not(feature = "dynamic-labels"))]
     level: Level,
 
-    #[cfg(feature = "dynamic_labels")]
+    #[cfg(feature = "dynamic-labels")]
     formatted_labels: String,
 }
 
@@ -355,7 +355,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             })
             .unwrap_or(Vec::new());
 
-        #[cfg(feature = "dynamic_labels")]
+        #[cfg(feature = "dynamic-labels")]
         let formatted_labels = {
             let mut label_selector = LabelSelectorVisitor::new(&self.dynamic_labels);
             event.record(&mut label_selector);
@@ -378,10 +378,10 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
             })
             .expect("json serialization shouldn't fail"),
 
-            #[cfg(not(feature = "dynamic_labels"))]
+            #[cfg(not(feature = "dynamic-labels"))]
             level: *meta.level(),
 
-            #[cfg(feature = "dynamic_labels")]
+            #[cfg(feature = "dynamic-labels")]
             formatted_labels,
         }));
     }
@@ -475,10 +475,10 @@ pub struct BackgroundTask {
     loki_url: Url,
     receiver: ReceiverStream<Option<LokiEvent>>,
 
-    #[cfg(not(feature = "dynamic_labels"))]
+    #[cfg(not(feature = "dynamic-labels"))]
     level_queues: LevelMap<SendQueue>,
 
-    #[cfg(feature = "dynamic_labels")]
+    #[cfg(feature = "dynamic-labels")]
     label_queues: LabelMap<SendQueue>,
 
     base_labels: FormattedLabels,
@@ -504,10 +504,10 @@ impl BackgroundTask {
                 .join("loki/api/v1/push")
                 .map_err(|_| Error(ErrorI::InvalidLokiUrl))?,
 
-            #[cfg(not(feature = "dynamic_labels"))]
+            #[cfg(not(feature = "dynamic-labels"))]
             level_queues: LevelMap::from_fn(|level| SendQueue::new(labels.finish(level))),
 
-            #[cfg(feature = "dynamic_labels")]
+            #[cfg(feature = "dynamic-labels")]
             label_queues: LabelMap::new(),
 
             base_labels: labels.clone(),
@@ -549,10 +549,10 @@ impl BackgroundTask {
     }
     /// Takes mut event for perfomance reasons - taking the label out of it
     fn get_queue_for_event<'a>(&'a mut self, event: &LokiEvent) -> &'a mut SendQueue {
-        #[cfg(not(feature = "dynamic_labels"))]
+        #[cfg(not(feature = "dynamic-labels"))]
         let queue = self.level_queues[event.level];
 
-        #[cfg(feature = "dynamic_labels")]
+        #[cfg(feature = "dynamic-labels")]
         let queue = {
             self.label_queues.get_or_insert(&event.formatted_labels, || {
                 let joined_labels = self
@@ -566,19 +566,19 @@ impl BackgroundTask {
         queue
     }
     fn queues_mut(&mut self) -> impl Iterator<Item = &mut SendQueue> {
-        #[cfg(not(feature = "dynamic_labels"))]
+        #[cfg(not(feature = "dynamic-labels"))]
         let queues = self.level_queues.values_mut();
 
-        #[cfg(feature = "dynamic_labels")]
+        #[cfg(feature = "dynamic-labels")]
         let queues = self.label_queues.values_mut();
 
         queues
     }
     fn queues(&self) -> impl Iterator<Item = &SendQueue> {
-        #[cfg(not(feature = "dynamic_labels"))]
+        #[cfg(not(feature = "dynamic-labels"))]
         let queues = self.level_queues.values();
 
-        #[cfg(feature = "dynamic_labels")]
+        #[cfg(feature = "dynamic-labels")]
         let queues = self.label_queues.values();
 
         queues
