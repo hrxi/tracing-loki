@@ -33,8 +33,10 @@ url = "2.2.2"
 tokio = { version = "1.17.0", features = ["macros", "rt-multi-thread"] }
 
 [features]
-default = ["compat-0-2-1", "native-tls"]
+default = ["compat-0-2-1", "native-tls", "dynamic_labels"]
 compat-0-2-1 = []
 
 native-tls = ["reqwest/native-tls"]
 rustls = ["reqwest/rustls-tls"]
+
+dynamic_labels = []

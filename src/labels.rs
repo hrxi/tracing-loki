@@ -1,9 +1,14 @@
 use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use tracing_core::Level;
+use tracing_core::field::Visit;
 
 use super::Error;
 use super::ErrorI;
+
+#[derive(Debug, PartialOrd, Ord, PartialEq, Eq, Hash, Clone)]
+pub struct ValidatedLabel(String);
 
 #[derive(Clone)]
 pub struct FormattedLabels {
@@ -18,28 +23,7 @@ impl FormattedLabels {
             formatted: String::from("{"),
         }
     }
-    pub fn add(&mut self, key: String, value: &str) -> Result<(), Error> {
-        // Couldn't find documentation except for the promtail source code:
-        // https://github.com/grafana/loki/blob/8c06c546ab15a568f255461f10318dae37e022d3/vendor/github.com/prometheus/prometheus/promql/parser/generated_parser.y#L597-L598
-        //
-        // Apparently labels that confirm to yacc's "IDENTIFIER" are okay. I
-        // couldn't find which those are. Let's be conservative and allow
-        // `[A-Za-z_]*`.
-        for (i, b) in key.bytes().enumerate() {
-            match b {
-                b'A'..=b'Z' | b'a'..=b'z' | b'_' => {}
-                // The first byte outside of the above range must start a UTF-8
-                // character.
-                _ => {
-                    let c = key[i..].chars().next().unwrap();
-                    return Err(Error(ErrorI::InvalidLabelCharacter(key, c)));
-                }
-            }
-        }
-        if key == "level" {
-            return Err(Error(ErrorI::ReservedLabelLevel));
-        }
-
+    pub fn add(&mut self, ValidatedLabel(key): ValidatedLabel, value: &str) -> Result<(), Error> {
         // Couldn't find documentation except for the promtail source code:
         // https://github.com/grafana/loki/blob/8c06c546ab15a568f255461f10318dae37e022d3/clients/pkg/promtail/client/batch.go#L61-L75
         //
@@ -54,6 +38,24 @@ impl FormattedLabels {
             return Err(Error(ErrorI::DuplicateLabel(duplicate_key)));
         }
         Ok(())
+    }
+    pub fn contains(&self, ValidatedLabel(key): &ValidatedLabel) -> bool {
+        self.seen_keys.contains(key)
+    }
+    /// Join with another set of labels that are already formatted.
+    /// Does not check that the other labels are valid or that they don't contain duplicates
+    /// including with the current set of labels. That is checked by the builder.
+    pub fn join_with_finished(self, other_formatted: String) -> String {
+        if self.formatted.len() <= 1 {
+            return other_formatted;
+        }
+
+        let mut result = self.formatted;
+        if result.len() > 1 {
+            result.push(',');
+        }
+        result.push_str(&other_formatted[1..]);
+        result
     }
     pub fn finish(&self, level: Level) -> String {
         let mut result = self.formatted.clone();
@@ -71,8 +73,83 @@ impl FormattedLabels {
     }
 }
 
+impl ValidatedLabel {
+    pub fn new(label: String) -> Result<Self, Error> {
+        // Couldn't find documentation except for the promtail source code:
+        // https://github.com/grafana/loki/blob/8c06c546ab15a568f255461f10318dae37e022d3/vendor/github.com/prometheus/prometheus/promql/parser/generated_parser.y#L597-L598
+        //
+        // Apparently labels that confirm to yacc's "IDENTIFIER" are okay. I
+        // couldn't find which those are. Let's be conservative and allow
+        // `[A-Za-z_]*`.
+        for (i, b) in label.bytes().enumerate() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'_' => {}
+                // The first byte outside of the above range must start a UTF-8
+                // character.
+                _ => {
+                    let c = label[i..].chars().next().unwrap();
+                    return Err(Error(ErrorI::InvalidLabelCharacter(label, c)));
+                }
+            }
+        }
+        if label == "level" {
+            return Err(Error(ErrorI::ReservedLabelLevel));
+        }
+        Ok(ValidatedLabel(label))
+    }
+
+    pub fn inner(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone)]
+pub struct LabelSelectorVisitor<'a> {
+    select_keys: &'a HashMap<String, ValidatedLabel>,
+    found_labels: Vec<(ValidatedLabel, String)>
+}
+
+impl<'a> LabelSelectorVisitor<'a> {
+    pub fn new(select_keys: &'a HashMap<String, ValidatedLabel>) -> Self {
+        Self {
+            select_keys,
+            found_labels: Vec::new(),
+        }
+    }
+
+    pub fn finish(mut self, level: Level) -> String {
+        self.found_labels.sort_by(|val1, val2| val1.0.cmp(&val2.0));
+        let mut labels = FormattedLabels::new();
+        for (key, value) in self.found_labels {
+            match labels.add(key.to_owned(), &value) {
+                Ok(()) | Err(Error(ErrorI::DuplicateLabel(_))) => (),   // Ignore duplicate labels.
+                Err(e) => panic!("Unexpected error: {:?}", e),
+            }
+        }
+        labels.finish(level)
+    }
+}
+
+impl<'a> Visit for LabelSelectorVisitor<'a> {
+    fn record_debug(&mut self, field: &tracing_core::Field, value: &dyn std::fmt::Debug) {
+        if let Some(validated) = self.select_keys.get(field.name()) {
+            self.found_labels.push((validated.clone(), format!("{:?}", value)));
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing_core::Field, value: &str) {
+        // Overriding this to avoid using the debug implementation that would escape + add quotes twice
+        // (including the final formatting).
+        if let Some(validated) = self.select_keys.get(field.name()) {
+            self.found_labels.push((validated.clone(), value.to_owned()));
+        }
+    }
+}
+
 #[cfg(test)]
 mod test {
+    use crate::labels::ValidatedLabel;
+
     use super::FormattedLabels;
     use tracing_core::Level;
 
@@ -102,16 +179,16 @@ mod test {
 
     #[test]
     fn level() {
-        assert!(FormattedLabels::new().add("level".into(), "").is_err());
-        assert!(FormattedLabels::new().add("level".into(), "blurb").is_err());
+        assert!(ValidatedLabel::new("level".into()).is_err());
     }
 
     #[test]
     fn duplicate() {
         let mut labels = FormattedLabels::new();
-        labels.add("label".into(), "abc").unwrap();
-        assert!(labels.clone().add("label".into(), "def").is_err());
-        assert!(labels.clone().add("label".into(), "abc").is_err());
-        assert!(labels.clone().add("label".into(), "").is_err());
+        let validated = ValidatedLabel::new("abc".into()).unwrap();
+        labels.add(validated.clone(), "abc").unwrap();
+        assert!(labels.clone().add(validated.clone(), "def").is_err());
+        assert!(labels.clone().add(validated.clone(), "abc").is_err());
+        assert!(labels.clone().add(validated.clone(), "").is_err());
     }
 }
