@@ -166,9 +166,10 @@ impl Builder {
     /// values. For example, `"environment"` with values `"ci"`,
     /// `"development"`, `"staging"` or `"production"` would work well.
     ///
-    /// For open categories, extra fields are a better fit. See
-    /// [`Builder::extra_field`].
-    ///
+    /// For open categories, simple fields are a better fit. If you don't register
+    /// your tracing fields as dynamic labels using this method,
+    /// they will be sent as simple fields.
+    /// 
     /// # Example
     ///
     /// ```
