@@ -62,35 +62,3 @@ impl<T> ops::IndexMut<Level> for LevelMap<T> {
         &mut self.map[level_index(index)]
     }
 }
-
-struct LevelIter {
-    next: Option<Level>,
-}
-
-impl Iterator for LevelIter {
-    type Item = Level;
-    fn next(&mut self) -> Option<Level> {
-        let result = self.next;
-        self.next = self.next.and_then(|l| {
-            Some(match l {
-                Level::TRACE => Level::DEBUG,
-                Level::DEBUG => Level::INFO,
-                Level::INFO => Level::WARN,
-                Level::WARN => Level::ERROR,
-                Level::ERROR => return None,
-            })
-        });
-        result
-    }
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = match self.next {
-            Some(Level::TRACE) => 5,
-            Some(Level::DEBUG) => 4,
-            Some(Level::INFO) => 3,
-            Some(Level::WARN) => 2,
-            Some(Level::ERROR) => 1,
-            None => 0,
-        };
-        (len, Some(len))
-    }
-}
