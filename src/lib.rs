@@ -490,9 +490,12 @@ impl BackgroundTask {
         })
     }
     fn backoff_time(&self) -> (bool, Duration) {
-        let backoff_count: u64 = self.backoff_count.into();
-        let backoff_time = if backoff_count >= 1 {
-            Duration::from_millis(500 * (1 << (backoff_count - 1)))
+        let backoff_time = if self.backoff_count >= 1 {
+            Duration::from_millis(
+                500u64
+                    .checked_shl(self.backoff_count - 1)
+                    .unwrap_or(u64::MAX),
+            )
         } else {
             Duration::from_millis(0)
         };
