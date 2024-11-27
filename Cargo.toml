@@ -1,8 +1,5 @@
 [workspace]
-members = [
-  "loki-api",
-  "loki-api/generate",
-]
+members = ["loki-api", "loki-api/generate"]
 
 [package]
 name = "tracing-loki"
@@ -38,3 +35,4 @@ compat-0-2-1 = []
 
 native-tls = ["reqwest/native-tls"]
 rustls = ["reqwest/rustls-tls"]
+rustls-native-roots = ["reqwest/rustls-tls-native-roots"]
