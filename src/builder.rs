@@ -1,3 +1,5 @@
+use crate::BackgroundTaskFuture;
+
 use super::event_channel;
 use super::BackgroundTask;
 use super::BackgroundTaskController;
@@ -205,20 +207,23 @@ impl Builder {
     /// appending `/loki/api/v1/push`.
     ///
     /// See the crate's root documentation for an example.
-    pub fn build_url(self, loki_url: Url) -> Result<(Layer, BackgroundTask), Error> {
+    pub fn build_url(self, loki_url: Url) -> Result<(Layer, BackgroundTaskFuture), Error> {
         let (sender, receiver) = event_channel(self.channel_cap);
         Ok((
             Layer {
                 sender,
                 extra_fields: self.extra_fields,
             },
-            BackgroundTask::new(
-                loki_url,
-                self.http_headers,
-                receiver,
-                &self.labels,
-                self.backoff,
-            )?,
+            Box::pin(
+                BackgroundTask::new(
+                    loki_url,
+                    self.http_headers,
+                    receiver,
+                    &self.labels,
+                    self.backoff,
+                )?
+                .start(),
+            ),
         ))
     }
     /// Build the tracing [`Layer`], [`BackgroundTask`] and its
@@ -242,7 +247,7 @@ impl Builder {
     pub fn build_controller_url(
         self,
         loki_url: Url,
-    ) -> Result<(Layer, BackgroundTaskController, BackgroundTask), Error> {
+    ) -> Result<(Layer, BackgroundTaskController, BackgroundTaskFuture), Error> {
         let (sender, receiver) = event_channel(self.channel_cap);
         Ok((
             Layer {
@@ -250,13 +255,16 @@ impl Builder {
                 extra_fields: self.extra_fields,
             },
             BackgroundTaskController { sender },
-            BackgroundTask::new(
-                loki_url,
-                self.http_headers,
-                receiver,
-                &self.labels,
-                self.backoff,
-            )?,
+            Box::pin(
+                BackgroundTask::new(
+                    loki_url,
+                    self.http_headers,
+                    receiver,
+                    &self.labels,
+                    self.backoff,
+                )?
+                .start(),
+            ),
         ))
     }
 }

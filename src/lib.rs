@@ -26,7 +26,7 @@
 //!
 //!     // The background task needs to be spawned so the logs actually get
 //!     // delivered.
-//!     tokio::spawn(task.start());
+//!     tokio::spawn::<tracing_loki::BackgroundTaskFuture>(task);
 //!
 //!     tracing::info!(
 //!         task = "tracing_setup",
@@ -60,7 +60,9 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::error;
 use std::fmt;
+use std::future::Future;
 use std::mem;
+use std::pin::Pin;
 use std::time::Duration;
 use std::time::SystemTime;
 use tracing_core::field::Field;
@@ -83,6 +85,9 @@ use ErrorInner as ErrorI;
 
 pub use builder::builder;
 pub use builder::Builder;
+
+/// Wrapper around the future running in the [`BackgroundTask`]
+pub type BackgroundTaskFuture = Pin<Box<dyn Future<Output = ()> + Send + Sync>>;
 
 mod builder;
 mod labels;
@@ -164,6 +169,7 @@ impl fmt::Display for ErrorInner {
 /// ```rust
 /// use tracing_subscriber::layer::SubscriberExt;
 /// use tracing_subscriber::util::SubscriberInitExt;
+/// use tracing_loki::BackgroundTaskFuture;
 /// use url::Url;
 ///
 /// #[tokio::main]
@@ -183,7 +189,7 @@ impl fmt::Display for ErrorInner {
 ///
 ///     // The background task needs to be spawned so the logs actually get
 ///     // delivered.
-///     tokio::spawn(task.start());
+///     tokio::spawn::<BackgroundTaskFuture>(task);
 ///
 ///     tracing::info!(
 ///         task = "tracing_setup",
@@ -198,7 +204,7 @@ pub fn layer(
     loki_url: Url,
     labels: HashMap<String, String>,
     extra_fields: HashMap<String, String>,
-) -> Result<(Layer, BackgroundTask), Error> {
+) -> Result<(Layer, BackgroundTaskFuture), Error> {
     let mut builder = builder();
     for (key, value) in labels {
         builder = builder.label(key, value)?;
