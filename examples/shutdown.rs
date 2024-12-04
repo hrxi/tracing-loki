@@ -19,7 +19,7 @@ fn tracing_setup(
         .with(layer)
         .with(Layer::new())
         .init();
-    Ok((controller, tokio::spawn(task)))
+    Ok((controller, tokio::spawn(task.start())))
 }
 
 #[tokio::main(flavor = "current_thread")]

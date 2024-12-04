@@ -19,7 +19,7 @@ fn tracing_setup() -> Result<(), Box<dyn Error>> {
         .with(layer)
         .with(Layer::new())
         .init();
-    tokio::spawn(task);
+    tokio::spawn(task.start());
     Ok(())
 }
 

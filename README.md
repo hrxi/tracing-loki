@@ -45,7 +45,7 @@ async fn main() -> Result<(), tracing_loki::Error> {
 
     // The background task needs to be spawned so the logs actually get
     // delivered.
-    tokio::spawn(task);
+    tokio::spawn(task.start());
 
     tracing::info!(
         task = "tracing_setup",

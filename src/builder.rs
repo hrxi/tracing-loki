@@ -7,7 +7,10 @@ use super::FormattedLabels;
 use super::Layer;
 use std::collections::hash_map;
 use std::collections::HashMap;
+use std::time::Duration;
 use url::Url;
+
+const DEFAULT_BACKGROUD_TASK_BACKOFF: u64 = 500;
 
 /// Create a [`Builder`] for constructing a [`Layer`] and its corresponding
 /// [`BackgroundTask`].
@@ -23,6 +26,7 @@ pub fn builder() -> Builder {
         labels: FormattedLabels::new(),
         extra_fields: HashMap::new(),
         http_headers,
+        backoff: Duration::from_millis(DEFAULT_BACKGROUD_TASK_BACKOFF),
     }
 }
 
@@ -35,6 +39,7 @@ pub struct Builder {
     labels: FormattedLabels,
     extra_fields: HashMap<String, String>,
     http_headers: reqwest::header::HeaderMap,
+    backoff: Duration,
 }
 
 impl Builder {
@@ -143,6 +148,26 @@ impl Builder {
         }
         Ok(self)
     }
+
+    /// Set the backoff used by the backgroud process.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use tracing_loki::Error;
+    /// # use std::time::Duration;
+    /// # fn main() -> Result<(), Error> {
+    /// let builder = tracing_loki::builder()
+    ///     // Set the period of pushing to Loki.
+    ///     .backoff(Duration::from_millis(100)
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn backoff(mut self, backoff: Duration) -> Builder {
+        self.backoff = backoff;
+        self
+    }
+
     /// Build the tracing [`Layer`] and its corresponding [`BackgroundTask`].
     ///
     /// The `loki_url` is the URL of the Loki server, like
@@ -164,7 +189,13 @@ impl Builder {
                 sender,
                 extra_fields: self.extra_fields,
             },
-            BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
+            BackgroundTask::new(
+                loki_url,
+                self.http_headers,
+                receiver,
+                &self.labels,
+                self.backoff,
+            )?,
         ))
     }
     /// Build the tracing [`Layer`], [`BackgroundTask`] and its
@@ -196,7 +227,13 @@ impl Builder {
                 extra_fields: self.extra_fields,
             },
             BackgroundTaskController { sender },
-            BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
+            BackgroundTask::new(
+                loki_url,
+                self.http_headers,
+                receiver,
+                &self.labels,
+                self.backoff,
+            )?,
         ))
     }
 }
