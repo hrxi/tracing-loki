@@ -94,8 +94,8 @@ mod no_subscriber;
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
 
-fn event_channel() -> (Sender<Option<LokiEvent>>, Receiver<Option<LokiEvent>>) {
-    flume::bounded(512)
+fn event_channel(cap: usize) -> (Sender<Option<LokiEvent>>, Receiver<Option<LokiEvent>>) {
+    flume::bounded(cap)
 }
 
 /// The error type for constructing a [`Layer`].

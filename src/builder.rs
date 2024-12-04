@@ -11,6 +11,7 @@ use std::time::Duration;
 use url::Url;
 
 const DEFAULT_BACKGROUD_TASK_BACKOFF: u64 = 500;
+const DEFAULT_CHANNEL_CAP: usize = 512;
 
 /// Create a [`Builder`] for constructing a [`Layer`] and its corresponding
 /// [`BackgroundTask`].
@@ -27,6 +28,7 @@ pub fn builder() -> Builder {
         extra_fields: HashMap::new(),
         http_headers,
         backoff: Duration::from_millis(DEFAULT_BACKGROUD_TASK_BACKOFF),
+        channel_cap: DEFAULT_CHANNEL_CAP,
     }
 }
 
@@ -40,6 +42,7 @@ pub struct Builder {
     extra_fields: HashMap<String, String>,
     http_headers: reqwest::header::HeaderMap,
     backoff: Duration,
+    channel_cap: usize,
 }
 
 impl Builder {
@@ -168,6 +171,26 @@ impl Builder {
         self
     }
 
+    /// Set the size of the internal event channel.
+    /// This has an impact on RAM usage.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use tracing_loki::Error;
+    /// # use std::time::Duration;
+    /// # fn main() -> Result<(), Error> {
+    /// let builder = tracing_loki::builder()
+    ///     // Set the period of pushing to Loki.
+    ///     .channel_cap(1024);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn channel_cap(mut self, channel_cap: usize) -> Builder {
+        self.channel_cap = channel_cap;
+        self
+    }
+
     /// Build the tracing [`Layer`] and its corresponding [`BackgroundTask`].
     ///
     /// The `loki_url` is the URL of the Loki server, like
@@ -183,7 +206,7 @@ impl Builder {
     ///
     /// See the crate's root documentation for an example.
     pub fn build_url(self, loki_url: Url) -> Result<(Layer, BackgroundTask), Error> {
-        let (sender, receiver) = event_channel();
+        let (sender, receiver) = event_channel(self.channel_cap);
         Ok((
             Layer {
                 sender,
@@ -220,7 +243,7 @@ impl Builder {
         self,
         loki_url: Url,
     ) -> Result<(Layer, BackgroundTaskController, BackgroundTask), Error> {
-        let (sender, receiver) = event_channel();
+        let (sender, receiver) = event_channel(self.channel_cap);
         Ok((
             Layer {
                 sender: sender.clone(),
