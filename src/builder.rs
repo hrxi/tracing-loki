@@ -159,7 +159,7 @@ impl Builder {
     /// # fn main() -> Result<(), Error> {
     /// let builder = tracing_loki::builder()
     ///     // Set the period of pushing to Loki.
-    ///     .backoff(Duration::from_millis(100)
+    ///     .backoff(Duration::from_millis(100));
     /// # Ok(())
     /// # }
     /// ```
