@@ -1,3 +1,5 @@
+use crate::BackgroundTaskFuture;
+
 use super::event_channel;
 use super::BackgroundTask;
 use super::BackgroundTaskController;
@@ -7,7 +9,11 @@ use super::FormattedLabels;
 use super::Layer;
 use std::collections::hash_map;
 use std::collections::HashMap;
+use std::time::Duration;
 use url::Url;
+
+const DEFAULT_BACKGROUD_TASK_BACKOFF: u64 = 500;
+const DEFAULT_CHANNEL_CAP: usize = 512;
 
 /// Create a [`Builder`] for constructing a [`Layer`] and its corresponding
 /// [`BackgroundTask`].
@@ -23,6 +29,8 @@ pub fn builder() -> Builder {
         labels: FormattedLabels::new(),
         extra_fields: HashMap::new(),
         http_headers,
+        backoff: Duration::from_millis(DEFAULT_BACKGROUD_TASK_BACKOFF),
+        channel_cap: DEFAULT_CHANNEL_CAP,
     }
 }
 
@@ -35,6 +43,8 @@ pub struct Builder {
     labels: FormattedLabels,
     extra_fields: HashMap<String, String>,
     http_headers: reqwest::header::HeaderMap,
+    backoff: Duration,
+    channel_cap: usize,
 }
 
 impl Builder {
@@ -143,6 +153,46 @@ impl Builder {
         }
         Ok(self)
     }
+
+    /// Set the backoff used by the backgroud process.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use tracing_loki::Error;
+    /// # use std::time::Duration;
+    /// # fn main() -> Result<(), Error> {
+    /// let builder = tracing_loki::builder()
+    ///     // Set the period of pushing to Loki.
+    ///     .backoff(Duration::from_millis(100));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn backoff(mut self, backoff: Duration) -> Builder {
+        self.backoff = backoff;
+        self
+    }
+
+    /// Set the size of the internal event channel.
+    /// This has an impact on RAM usage.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use tracing_loki::Error;
+    /// # use std::time::Duration;
+    /// # fn main() -> Result<(), Error> {
+    /// let builder = tracing_loki::builder()
+    ///     // Set the period of pushing to Loki.
+    ///     .channel_cap(1024);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn channel_cap(mut self, channel_cap: usize) -> Builder {
+        self.channel_cap = channel_cap;
+        self
+    }
+
     /// Build the tracing [`Layer`] and its corresponding [`BackgroundTask`].
     ///
     /// The `loki_url` is the URL of the Loki server, like
@@ -157,14 +207,23 @@ impl Builder {
     /// appending `/loki/api/v1/push`.
     ///
     /// See the crate's root documentation for an example.
-    pub fn build_url(self, loki_url: Url) -> Result<(Layer, BackgroundTask), Error> {
-        let (sender, receiver) = event_channel();
+    pub fn build_url(self, loki_url: Url) -> Result<(Layer, BackgroundTaskFuture), Error> {
+        let (sender, receiver) = event_channel(self.channel_cap);
         Ok((
             Layer {
                 sender,
                 extra_fields: self.extra_fields,
             },
-            BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
+            Box::pin(
+                BackgroundTask::new(
+                    loki_url,
+                    self.http_headers,
+                    receiver,
+                    &self.labels,
+                    self.backoff,
+                )?
+                .start(),
+            ),
         ))
     }
     /// Build the tracing [`Layer`], [`BackgroundTask`] and its
@@ -188,15 +247,24 @@ impl Builder {
     pub fn build_controller_url(
         self,
         loki_url: Url,
-    ) -> Result<(Layer, BackgroundTaskController, BackgroundTask), Error> {
-        let (sender, receiver) = event_channel();
+    ) -> Result<(Layer, BackgroundTaskController, BackgroundTaskFuture), Error> {
+        let (sender, receiver) = event_channel(self.channel_cap);
         Ok((
             Layer {
                 sender: sender.clone(),
                 extra_fields: self.extra_fields,
             },
             BackgroundTaskController { sender },
-            BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
+            Box::pin(
+                BackgroundTask::new(
+                    loki_url,
+                    self.http_headers,
+                    receiver,
+                    &self.labels,
+                    self.backoff,
+                )?
+                .start(),
+            ),
         ))
     }
 }
