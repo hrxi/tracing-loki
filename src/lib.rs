@@ -77,27 +77,43 @@ use tracing_core::span::Attributes;
 use tracing_core::span::Id;
 use tracing_core::span::Record;
 use tracing_core::Event;
-use tracing_core::Level;
 use tracing_core::Subscriber;
 use tracing_log::NormalizeEvent;
 use tracing_subscriber::layer::Context as TracingContext;
 use tracing_subscriber::registry::LookupSpan;
 use url::Url;
 
+#[allow(unused)]
+use tracing_core::Level;
+
 use labels::FormattedLabels;
-use level_map::LevelMap;
-use log_support::SerializeEventFieldMapStrippingLog;
+use labels::ValidatedLabel;
+use log_support::SerializeEventFieldMapStrippingLogAndKeys;
 use no_subscriber::NoSubscriber;
 use ErrorInner as ErrorI;
+
+#[cfg(not(feature = "dynamic-labels"))]
+use level_map::LevelMap;
+
+#[cfg(feature = "dynamic-labels")]
+use label_map::LabelMap;
+
+#[cfg(feature = "dynamic-labels")]
+use labels::LabelSelectorVisitor;
 
 pub use builder::builder;
 pub use builder::Builder;
 
 mod builder;
 mod labels;
-mod level_map;
 mod log_support;
 mod no_subscriber;
+
+#[cfg(not(feature = "dynamic-labels"))]
+mod level_map;
+
+#[cfg(feature = "dynamic-labels")]
+mod label_map;
 
 #[cfg(doctest)]
 #[doc = include_str!("../README.md")]
@@ -107,7 +123,7 @@ fn event_channel() -> (
     mpsc::Sender<Option<LokiEvent>>,
     mpsc::Receiver<Option<LokiEvent>>,
 ) {
-    mpsc::channel(512)
+    mpsc::channel(16384) // make it so big that if we drop events, it's already kind of bad
 }
 
 /// The error type for constructing a [`Layer`].
@@ -231,19 +247,25 @@ pub fn layer(
 pub struct Layer {
     extra_fields: HashMap<String, String>,
     sender: mpsc::Sender<Option<LokiEvent>>,
+    dynamic_labels: HashMap<String, ValidatedLabel>,
 }
 
 struct LokiEvent {
     trigger_send: bool,
     timestamp: SystemTime,
-    level: Level,
     message: String,
+
+    #[cfg(not(feature = "dynamic-labels"))]
+    level: Level,
+
+    #[cfg(feature = "dynamic-labels")]
+    formatted_labels: String,
 }
 
 #[derive(Serialize)]
 struct SerializedEvent<'a> {
     #[serde(flatten)]
-    event: SerializeEventFieldMapStrippingLog<'a>,
+    event: SerializeEventFieldMapStrippingLogAndKeys<'a>,
     #[serde(flatten)]
     extra_fields: &'a HashMap<String, String>,
     #[serde(flatten)]
@@ -335,13 +357,20 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
                 })
             })
             .unwrap_or(Vec::new());
+
+        #[cfg(feature = "dynamic-labels")]
+        let formatted_labels = {
+            let mut label_selector = LabelSelectorVisitor::new(&self.dynamic_labels);
+            event.record(&mut label_selector);
+            label_selector.finish(*meta.level())
+        };
         // TODO: Anything useful to do when the capacity has been reached?
+        // (the capacity is quite large so if it happens we have bigger problems)
         let _ = self.sender.try_send(Some(LokiEvent {
             trigger_send: !meta.target().starts_with("tracing_loki"),
             timestamp,
-            level: *meta.level(),
             message: serde_json::to_string(&SerializedEvent {
-                event: SerializeEventFieldMapStrippingLog(event),
+                event: SerializeEventFieldMapStrippingLogAndKeys(event, &self.dynamic_labels),
                 extra_fields: &self.extra_fields,
                 span_fields,
                 _spans: &spans,
@@ -351,6 +380,12 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
                 _line: meta.line(),
             })
             .expect("json serialization shouldn't fail"),
+
+            #[cfg(not(feature = "dynamic-labels"))]
+            level: *meta.level(),
+
+            #[cfg(feature = "dynamic-labels")]
+            formatted_labels,
         }));
     }
 }
@@ -442,7 +477,16 @@ impl error::Error for BadRedirect {}
 pub struct BackgroundTask {
     loki_url: Url,
     receiver: ReceiverStream<Option<LokiEvent>>,
-    queues: LevelMap<SendQueue>,
+
+    #[cfg(not(feature = "dynamic-labels"))]
+    level_queues: LevelMap<SendQueue>,
+
+    #[cfg(feature = "dynamic-labels")]
+    label_queues: LabelMap<SendQueue>,
+
+    #[cfg(feature = "dynamic-labels")]
+    base_labels: FormattedLabels,
+
     buffer: Buffer,
     http_client: reqwest::Client,
     backoff_count: u32,
@@ -464,7 +508,16 @@ impl BackgroundTask {
             loki_url: loki_url
                 .join("loki/api/v1/push")
                 .map_err(|_| Error(ErrorI::InvalidLokiUrl))?,
-            queues: LevelMap::from_fn(|level| SendQueue::new(labels.finish(level))),
+
+            #[cfg(not(feature = "dynamic-labels"))]
+            level_queues: LevelMap::from_fn(|level| SendQueue::new(labels.finish(level))),
+
+            #[cfg(feature = "dynamic-labels")]
+            label_queues: LabelMap::new(),
+
+            #[cfg(feature = "dynamic-labels")]
+            base_labels: labels.clone(),
+
             buffer: Buffer::new(),
             http_client: reqwest::Client::builder()
                 .user_agent(concat!(
@@ -504,6 +557,43 @@ impl BackgroundTask {
             cmp::min(backoff_time, Duration::from_secs(600)),
         )
     }
+    /// Takes mut event for perfomance reasons - taking the label out of it
+    fn get_queue_for_event<'a>(&'a mut self, event: &LokiEvent) -> &'a mut SendQueue {
+        #[cfg(not(feature = "dynamic-labels"))]
+        let queue = &mut self.level_queues[event.level];
+
+        #[cfg(feature = "dynamic-labels")]
+        let queue = {
+            self.label_queues
+                .get_or_insert(&event.formatted_labels, || {
+                    let joined_labels = self
+                        .base_labels
+                        .clone()
+                        .join_with_finished(event.formatted_labels.clone());
+                    SendQueue::new(joined_labels)
+                })
+        };
+
+        queue
+    }
+    fn queues_mut(&mut self) -> impl Iterator<Item = &mut SendQueue> {
+        #[cfg(not(feature = "dynamic-labels"))]
+        let queues = self.level_queues.values_mut();
+
+        #[cfg(feature = "dynamic-labels")]
+        let queues = self.label_queues.values_mut();
+
+        queues
+    }
+    fn queues(&self) -> impl Iterator<Item = &SendQueue> {
+        #[cfg(not(feature = "dynamic-labels"))]
+        let queues = self.level_queues.values();
+
+        #[cfg(feature = "dynamic-labels")]
+        let queues = self.label_queues.values();
+
+        queues
+    }
 }
 
 impl Future for BackgroundTask {
@@ -513,7 +603,7 @@ impl Future for BackgroundTask {
 
         while let Poll::Ready(maybe_maybe_item) = Pin::new(&mut self.receiver).poll_next(cx) {
             match maybe_maybe_item {
-                Some(Some(item)) => self.queues[item.level].push(item),
+                Some(Some(item)) => self.get_queue_for_event(&item).push(item),
                 Some(None) => self.quitting = true, // Explicit close.
                 None => self.quitting = true,       // The sender was dropped.
             }
@@ -544,7 +634,7 @@ impl Future for BackgroundTask {
                                 tracing::subscriber::set_default(NoSubscriber::default());
                             if drop_outstanding {
                                 let num_dropped: usize =
-                                    self.queues.values_mut().map(|q| q.drop_outstanding()).sum();
+                                    self.queues_mut().map(|q| q.drop_outstanding()).sum();
                                 drop(default_guard);
                                 tracing::error!(
                                     num_dropped,
@@ -560,7 +650,7 @@ impl Future for BackgroundTask {
                             self.backoff_count = 0;
                         }
                         let res = res.map_err(|_| ());
-                        for q in self.queues.values_mut() {
+                        for q in self.queues_mut() {
                             q.on_send_result(res);
                         }
                         self.send_task = None;
@@ -568,13 +658,9 @@ impl Future for BackgroundTask {
                     Poll::Pending => {}
                 }
             }
-            if self.send_task.is_none()
-                && !backing_off
-                && self.queues.values().any(|q| q.should_send())
-            {
+            if self.send_task.is_none() && !backing_off && self.queues().any(|q| q.should_send()) {
                 let streams = self
-                    .queues
-                    .values_mut()
+                    .queues_mut()
                     .map(|q| q.prepare_sending())
                     .filter(|s| !s.entries.is_empty())
                     .collect();

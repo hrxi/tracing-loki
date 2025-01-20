@@ -1,4 +1,5 @@
 use super::event_channel;
+use super::labels::ValidatedLabel;
 use super::BackgroundTask;
 use super::BackgroundTaskController;
 use super::Error;
@@ -7,6 +8,7 @@ use super::FormattedLabels;
 use super::Layer;
 use std::collections::hash_map;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use url::Url;
 
 /// Create a [`Builder`] for constructing a [`Layer`] and its corresponding
@@ -23,6 +25,7 @@ pub fn builder() -> Builder {
         labels: FormattedLabels::new(),
         extra_fields: HashMap::new(),
         http_headers,
+        dynamic_labels: HashSet::new(),
     }
 }
 
@@ -35,6 +38,7 @@ pub struct Builder {
     labels: FormattedLabels,
     extra_fields: HashMap<String, String>,
     http_headers: reqwest::header::HeaderMap,
+    dynamic_labels: HashSet<ValidatedLabel>,
 }
 
 impl Builder {
@@ -70,7 +74,14 @@ impl Builder {
         key: S,
         value: T,
     ) -> Result<Builder, Error> {
-        self.labels.add(key.into(), value.as_ref())?;
+        let label = ValidatedLabel::new(key.into())?;
+
+        #[cfg(feature = "dynamic-labels")]
+        if self.dynamic_labels.contains(&label) {
+            return Err(Error(ErrorI::DuplicateLabel(label.inner().to_owned())));
+        }
+
+        self.labels.add(label, value.as_ref())?;
         Ok(self)
     }
     /// Set an extra field that is sent with all log records sent to Loki
@@ -143,6 +154,45 @@ impl Builder {
         }
         Ok(self)
     }
+    #[cfg(feature = "dynamic-labels")]
+    /// Add a dynamic label to the logs sent to Loki through the built `Layer`.
+    /// When a tracing field with the same name is present in an event, its value will be
+    /// sent as a label, instead of a field.
+    ///
+    /// This requires the `dynamic_labels` feature to be enabled.
+    ///
+    /// Like the static labels added with [`Builder::label`],
+    /// dynamic labels are supposed to be closed categories with few possible
+    /// values. For example, `"environment"` with values `"ci"`,
+    /// `"development"`, `"staging"` or `"production"` would work well.
+    ///
+    /// For open categories, simple fields are a better fit. If you don't register
+    /// your tracing fields as dynamic labels using this method,
+    /// they will be sent as simple fields.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use tracing_loki::Error;
+    /// # fn main() -> Result<(), Error> {
+    /// let builder = tracing_loki::builder()
+    ///     // Set the tenant ID for Loki.
+    ///     .dynamic_label("event_category")?;
+    /// tracing::error!(event_category = "my_category", "This is an error");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn dynamic_label<S: Into<String>>(mut self, key: S) -> Result<Builder, Error> {
+        let label = ValidatedLabel::new(key.into())?;
+        if self.labels.contains(&label) {
+            return Err(Error(ErrorI::DuplicateLabel(label.inner().to_owned())));
+        }
+        if let Some(existing) = self.dynamic_labels.replace(label) {
+            // Need to use the old value for the error message... all others are moved out.
+            return Err(Error(ErrorI::DuplicateLabel(existing.inner().to_owned())));
+        }
+        Ok(self)
+    }
     /// Build the tracing [`Layer`] and its corresponding [`BackgroundTask`].
     ///
     /// The `loki_url` is the URL of the Loki server, like
@@ -159,10 +209,16 @@ impl Builder {
     /// See the crate's root documentation for an example.
     pub fn build_url(self, loki_url: Url) -> Result<(Layer, BackgroundTask), Error> {
         let (sender, receiver) = event_channel();
+        let dynamic_labels = self
+            .dynamic_labels
+            .into_iter()
+            .map(|label| (label.inner().to_owned(), label))
+            .collect();
         Ok((
             Layer {
                 sender,
                 extra_fields: self.extra_fields,
+                dynamic_labels,
             },
             BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
         ))
@@ -190,10 +246,16 @@ impl Builder {
         loki_url: Url,
     ) -> Result<(Layer, BackgroundTaskController, BackgroundTask), Error> {
         let (sender, receiver) = event_channel();
+        let dynamic_labels = self
+            .dynamic_labels
+            .into_iter()
+            .map(|label| (label.inner().to_owned(), label))
+            .collect();
         Ok((
             Layer {
                 sender: sender.clone(),
                 extra_fields: self.extra_fields,
+                dynamic_labels,
             },
             BackgroundTaskController { sender },
             BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
