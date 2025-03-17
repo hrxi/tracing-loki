@@ -403,6 +403,8 @@ impl SendQueue {
                 .map(|e| loki::EntryAdapter {
                     timestamp: Some(e.timestamp.into()),
                     line: e.message.clone(),
+                    structured_metadata: vec![],
+                    parsed: vec![],
                 })
                 .collect(),
             // Couldn't find documentation except for the promtail source code:
