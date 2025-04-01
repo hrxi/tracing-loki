@@ -26,7 +26,7 @@
 //!
 //!     // The background task needs to be spawned so the logs actually get
 //!     // delivered.
-//!     tokio::spawn(task);
+//!     tokio::spawn::<tracing_loki::BackgroundTaskFuture>(task);
 //!
 //!     tracing::info!(
 //!         task = "tracing_setup",
@@ -53,24 +53,18 @@ compile_error!(
 /// Use this to avoid depending on a potentially-incompatible `url` version yourself.
 pub extern crate url;
 
+use flume::{Receiver, Sender};
 use loki_api::logproto as loki;
 use loki_api::prost;
 use serde::Serialize;
-use std::cmp;
 use std::collections::HashMap;
 use std::error;
 use std::fmt;
 use std::future::Future;
 use std::mem;
 use std::pin::Pin;
-use std::task::Context;
-use std::task::Poll;
 use std::time::Duration;
 use std::time::SystemTime;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::Stream;
-use tracing::instrument::WithSubscriber;
 use tracing_core::field::Field;
 use tracing_core::field::Visit;
 use tracing_core::span::Attributes;
@@ -87,11 +81,13 @@ use url::Url;
 use labels::FormattedLabels;
 use level_map::LevelMap;
 use log_support::SerializeEventFieldMapStrippingLog;
-use no_subscriber::NoSubscriber;
 use ErrorInner as ErrorI;
 
 pub use builder::builder;
 pub use builder::Builder;
+
+/// Wrapper around the future running in the [`BackgroundTask`]
+pub type BackgroundTaskFuture = Pin<Box<dyn Future<Output = ()> + Send + Sync>>;
 
 mod builder;
 mod labels;
@@ -103,11 +99,8 @@ mod no_subscriber;
 #[doc = include_str!("../README.md")]
 struct ReadmeDoctests;
 
-fn event_channel() -> (
-    mpsc::Sender<Option<LokiEvent>>,
-    mpsc::Receiver<Option<LokiEvent>>,
-) {
-    mpsc::channel(512)
+fn event_channel(cap: usize) -> (Sender<Option<LokiEvent>>, Receiver<Option<LokiEvent>>) {
+    flume::bounded(cap)
 }
 
 /// The error type for constructing a [`Layer`].
@@ -176,6 +169,7 @@ impl fmt::Display for ErrorInner {
 /// ```rust
 /// use tracing_subscriber::layer::SubscriberExt;
 /// use tracing_subscriber::util::SubscriberInitExt;
+/// use tracing_loki::BackgroundTaskFuture;
 /// use url::Url;
 ///
 /// #[tokio::main]
@@ -195,7 +189,7 @@ impl fmt::Display for ErrorInner {
 ///
 ///     // The background task needs to be spawned so the logs actually get
 ///     // delivered.
-///     tokio::spawn(task);
+///     tokio::spawn::<BackgroundTaskFuture>(task);
 ///
 ///     tracing::info!(
 ///         task = "tracing_setup",
@@ -210,7 +204,7 @@ pub fn layer(
     loki_url: Url,
     labels: HashMap<String, String>,
     extra_fields: HashMap<String, String>,
-) -> Result<(Layer, BackgroundTask), Error> {
+) -> Result<(Layer, BackgroundTaskFuture), Error> {
     let mut builder = builder();
     for (key, value) in labels {
         builder = builder.label(key, value)?;
@@ -230,9 +224,10 @@ pub fn layer(
 /// See the crate's root documentation for an example.
 pub struct Layer {
     extra_fields: HashMap<String, String>,
-    sender: mpsc::Sender<Option<LokiEvent>>,
+    sender: Sender<Option<LokiEvent>>,
 }
 
+#[allow(dead_code)]
 struct LokiEvent {
     trigger_send: bool,
     timestamp: SystemTime,
@@ -378,18 +373,7 @@ impl SendQueue {
         self.sending.clear();
         len
     }
-    fn on_send_result(&mut self, result: Result<(), ()>) {
-        match result {
-            Ok(()) => self.sending.clear(),
-            Err(()) => {
-                self.sending.append(&mut self.to_send);
-                mem::swap(&mut self.sending, &mut self.to_send);
-            }
-        }
-    }
-    fn should_send(&self) -> bool {
-        self.to_send.iter().any(|e| e.trigger_send)
-    }
+
     fn prepare_sending(&mut self) -> loki::StreamAdapter {
         if !self.sending.is_empty() {
             panic!("can only prepare sending while no request is in flight");
@@ -441,26 +425,23 @@ impl error::Error for BadRedirect {}
 /// See the crate's root documentation for an example.
 pub struct BackgroundTask {
     loki_url: Url,
-    receiver: ReceiverStream<Option<LokiEvent>>,
+    receiver: Receiver<Option<LokiEvent>>,
     queues: LevelMap<SendQueue>,
     buffer: Buffer,
     http_client: reqwest::Client,
-    backoff_count: u32,
-    backoff: Option<Pin<Box<tokio::time::Sleep>>>,
-    quitting: bool,
-    send_task:
-        Option<Pin<Box<dyn Future<Output = Result<(), Box<dyn error::Error>>> + Send + 'static>>>,
+    backoff: Duration,
 }
 
 impl BackgroundTask {
     fn new(
         loki_url: Url,
         http_headers: reqwest::header::HeaderMap,
-        receiver: mpsc::Receiver<Option<LokiEvent>>,
+        receiver: Receiver<Option<LokiEvent>>,
         labels: &FormattedLabels,
+        backoff: Duration,
     ) -> Result<BackgroundTask, Error> {
         Ok(BackgroundTask {
-            receiver: ReceiverStream::new(receiver),
+            receiver,
             loki_url: loki_url
                 .join("loki/api/v1/push")
                 .map_err(|_| Error(ErrorI::InvalidLokiUrl))?,
@@ -483,126 +464,54 @@ impl BackgroundTask {
                 }))
                 .build()
                 .expect("reqwest client builder"),
-            backoff_count: 0,
-            backoff: None,
-            quitting: false,
-            send_task: None,
+            backoff,
         })
     }
-    fn backoff_time(&self) -> (bool, Duration) {
-        let backoff_time = if self.backoff_count >= 1 {
-            Duration::from_millis(
-                500u64
-                    .checked_shl(self.backoff_count - 1)
-                    .unwrap_or(u64::MAX),
-            )
-        } else {
-            Duration::from_millis(0)
-        };
-        (
-            backoff_time >= Duration::from_secs(30),
-            cmp::min(backoff_time, Duration::from_secs(600)),
-        )
-    }
-}
 
-impl Future for BackgroundTask {
-    type Output = ();
-    fn poll(mut self: Pin<&mut BackgroundTask>, cx: &mut Context<'_>) -> Poll<()> {
-        let mut default_guard = tracing::subscriber::set_default(NoSubscriber::default());
-
-        while let Poll::Ready(maybe_maybe_item) = Pin::new(&mut self.receiver).poll_next(cx) {
-            match maybe_maybe_item {
-                Some(Some(item)) => self.queues[item.level].push(item),
-                Some(None) => self.quitting = true, // Explicit close.
-                None => self.quitting = true,       // The sender was dropped.
-            }
-        }
-
-        let mut backing_off = if let Some(backoff) = &mut self.backoff {
-            matches!(Pin::new(backoff).poll(cx), Poll::Pending)
-        } else {
-            false
-        };
-        if !backing_off {
-            self.backoff = None;
-        }
+    /// Does something
+    pub async fn start(mut self) {
         loop {
-            if let Some(send_task) = &mut self.send_task {
-                match Pin::new(send_task).poll(cx) {
-                    Poll::Ready(res) => {
-                        if let Err(e) = &res {
-                            let (drop_outstanding, backoff_time) = self.backoff_time();
-                            drop(default_guard);
-                            tracing::error!(
-                                error_count = self.backoff_count + 1,
-                                ?backoff_time,
-                                error = %e,
-                                "couldn't send logs to loki",
-                            );
-                            default_guard =
-                                tracing::subscriber::set_default(NoSubscriber::default());
-                            if drop_outstanding {
-                                let num_dropped: usize =
-                                    self.queues.values_mut().map(|q| q.drop_outstanding()).sum();
-                                drop(default_guard);
-                                tracing::error!(
-                                    num_dropped,
-                                    "dropped outstanding messages due to sending errors",
-                                );
-                                default_guard =
-                                    tracing::subscriber::set_default(NoSubscriber::default());
-                            }
-                            self.backoff = Some(Box::pin(tokio::time::sleep(backoff_time)));
-                            self.backoff_count += 1;
-                            backing_off = true;
-                        } else {
-                            self.backoff_count = 0;
-                        }
-                        let res = res.map_err(|_| ());
-                        for q in self.queues.values_mut() {
-                            q.on_send_result(res);
-                        }
-                        self.send_task = None;
+            // get everything form the channel
+            while let Ok(msg) = self.receiver.try_recv() {
+                match msg {
+                    Some(event) => {
+                        // push somewhere
+                        self.queues[event.level].push(event);
                     }
-                    Poll::Pending => {}
+                    None => {
+                        // explicit exit
+                        return;
+                    }
                 }
             }
-            if self.send_task.is_none()
-                && !backing_off
-                && self.queues.values().any(|q| q.should_send())
+            // send the things to loki
+            let streams = self
+                .queues
+                .values_mut()
+                .map(|q| q.prepare_sending())
+                .filter(|s| !s.entries.is_empty())
+                .collect();
+            let body = self
+                .buffer
+                .encode(&loki::PushRequest { streams })
+                .to_owned();
+            let request_builder = self.http_client.post(self.loki_url.clone());
+            if let Ok(res) = request_builder
+                .header(reqwest::header::CONTENT_TYPE, "application/x-snappy")
+                .body(body)
+                .send()
+                .await
             {
-                let streams = self
-                    .queues
-                    .values_mut()
-                    .map(|q| q.prepare_sending())
-                    .filter(|s| !s.entries.is_empty())
-                    .collect();
-                let body = self
-                    .buffer
-                    .encode(&loki::PushRequest { streams })
-                    .to_owned();
-                let request_builder = self.http_client.post(self.loki_url.clone());
-                self.send_task = Some(Box::pin(
-                    async move {
-                        request_builder
-                            .header(reqwest::header::CONTENT_TYPE, "application/x-snappy")
-                            .body(body)
-                            .send()
-                            .await?
-                            .error_for_status()?;
-                        Ok(())
-                    }
-                    .with_subscriber(NoSubscriber::default()),
-                ));
-            } else {
-                break;
+                if let Err(e) = res.error_for_status() {
+                    tracing::error!("Cannot send {e:?}");
+                }
             }
-        }
-        if self.quitting && self.send_task.is_none() {
-            Poll::Ready(())
-        } else {
-            Poll::Pending
+            // drop sent messages
+            self.queues.values_mut().for_each(|q| {
+                q.drop_outstanding();
+            });
+            // sleep before next iteration
+            tokio::time::sleep(self.backoff).await;
         }
     }
 }
@@ -646,13 +555,13 @@ impl Buffer {
 ///
 /// It'll still try to send all available data and then quit.
 pub struct BackgroundTaskController {
-    sender: mpsc::Sender<Option<LokiEvent>>,
+    sender: Sender<Option<LokiEvent>>,
 }
 
 impl BackgroundTaskController {
     /// Shut down the associated `BackgroundTask`.
     pub async fn shutdown(&self) {
         // Ignore the error. If no one is listening, it already shut down.
-        let _ = self.sender.send(None).await;
+        let _ = self.sender.send_async(None).await;
     }
 }
