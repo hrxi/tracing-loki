@@ -17,7 +17,7 @@ Usage
 Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
-tracing-loki = "0.1"
+tracing-loki = "0.2"
 ```
 
 Example
