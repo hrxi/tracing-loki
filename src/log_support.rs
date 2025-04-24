@@ -10,7 +10,7 @@ use tracing_serde::SerdeMapVisitor;
 
 pub struct SerializeEventFieldMapStrippingLog<'a>(pub &'a Event<'a>);
 
-impl<'a> Serialize for SerializeEventFieldMapStrippingLog<'a> {
+impl Serialize for SerializeEventFieldMapStrippingLog<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let len = self.0.fields().count();
         let serializer = serializer.serialize_map(Some(len))?;
