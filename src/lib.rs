@@ -68,8 +68,6 @@ use std::task::Poll;
 use std::time::Duration;
 use std::time::SystemTime;
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_stream::Stream;
 use tracing::instrument::WithSubscriber;
 use tracing_core::field::Field;
 use tracing_core::field::Visit;
@@ -441,7 +439,7 @@ impl error::Error for BadRedirect {}
 /// See the crate's root documentation for an example.
 pub struct BackgroundTask {
     loki_url: Url,
-    receiver: ReceiverStream<Option<LokiEvent>>,
+    receiver: mpsc::Receiver<Option<LokiEvent>>,
     queues: LevelMap<SendQueue>,
     buffer: Buffer,
     http_client: reqwest::Client,
@@ -460,7 +458,7 @@ impl BackgroundTask {
         labels: &FormattedLabels,
     ) -> Result<BackgroundTask, Error> {
         Ok(BackgroundTask {
-            receiver: ReceiverStream::new(receiver),
+            receiver,
             loki_url: loki_url
                 .join("loki/api/v1/push")
                 .map_err(|_| Error(ErrorI::InvalidLokiUrl))?,
@@ -511,7 +509,7 @@ impl Future for BackgroundTask {
     fn poll(mut self: Pin<&mut BackgroundTask>, cx: &mut Context<'_>) -> Poll<()> {
         let mut default_guard = tracing::subscriber::set_default(NoSubscriber::default());
 
-        while let Poll::Ready(maybe_maybe_item) = Pin::new(&mut self.receiver).poll_next(cx) {
+        while let Poll::Ready(maybe_maybe_item) = Pin::new(&mut self.receiver).poll_recv(cx) {
             match maybe_maybe_item {
                 Some(Some(item)) => self.queues[item.level].push(item),
                 Some(None) => self.quitting = true, // Explicit close.
