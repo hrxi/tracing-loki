@@ -17,7 +17,11 @@ pub fn builder() -> Builder {
     let mut http_headers = reqwest::header::HeaderMap::new();
     http_headers.insert(
         reqwest::header::CONTENT_TYPE,
-        reqwest::header::HeaderValue::from_static("application/x-snappy"),
+        reqwest::header::HeaderValue::from_static("application/x-protobuf"),
+    );
+    http_headers.insert(
+        reqwest::header::CONTENT_ENCODING,
+        reqwest::header::HeaderValue::from_static("snappy"),
     );
     Builder {
         labels: FormattedLabels::new(),

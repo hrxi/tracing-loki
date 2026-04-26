@@ -584,7 +584,8 @@ impl Future for BackgroundTask {
                 self.send_task = Some(Box::pin(
                     async move {
                         request_builder
-                            .header(reqwest::header::CONTENT_TYPE, "application/x-snappy")
+                            .header(reqwest::header::CONTENT_TYPE, "application/x-protobuf")
+                            .header(reqwest::header::CONTENT_ENCODING, "snappy")
                             .body(body)
                             .send()
                             .await?
