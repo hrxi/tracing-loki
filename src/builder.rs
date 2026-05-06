@@ -27,6 +27,7 @@ pub fn builder() -> Builder {
         labels: FormattedLabels::new(),
         extra_fields: HashMap::new(),
         http_headers,
+        include_event_metadata: true,
     }
 }
 
@@ -39,6 +40,7 @@ pub struct Builder {
     labels: FormattedLabels,
     extra_fields: HashMap<String, String>,
     http_headers: reqwest::header::HeaderMap,
+    include_event_metadata: bool,
 }
 
 impl Builder {
@@ -110,6 +112,26 @@ impl Builder {
         }
         Ok(self)
     }
+    /// Configure whether tracing event metadata is included in log records.
+    ///
+    /// When enabled (the default), log records include the `_target`,
+    /// `_module_path`, `_file`, and `_line` metadata fields. When disabled,
+    /// those fields are omitted entirely from the JSON payloads sent to Loki.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use tracing_loki::Error;
+    /// # fn main() -> Result<(), Error> {
+    /// let builder = tracing_loki::builder()
+    ///     .include_event_metadata(false);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn include_event_metadata(mut self, include: bool) -> Builder {
+        self.include_event_metadata = include;
+        self
+    }
     /// Set an extra HTTP header to be sent with all requests sent to Loki.
     ///
     /// This can be useful to set the `X-Scope-OrgID` header which Loki
@@ -167,6 +189,7 @@ impl Builder {
             Layer {
                 sender,
                 extra_fields: self.extra_fields,
+                include_event_metadata: self.include_event_metadata,
             },
             BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,
         ))
@@ -198,6 +221,7 @@ impl Builder {
             Layer {
                 sender: sender.clone(),
                 extra_fields: self.extra_fields,
+                include_event_metadata: self.include_event_metadata,
             },
             BackgroundTaskController { sender },
             BackgroundTask::new(loki_url, self.http_headers, receiver, &self.labels)?,

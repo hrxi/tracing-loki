@@ -229,6 +229,7 @@ pub fn layer(
 pub struct Layer {
     extra_fields: HashMap<String, String>,
     sender: mpsc::Sender<Option<LokiEvent>>,
+    include_event_metadata: bool,
 }
 
 struct LokiEvent {
@@ -247,6 +248,12 @@ struct SerializedEvent<'a> {
     #[serde(flatten)]
     span_fields: serde_json::Map<String, serde_json::Value>,
     _spans: &'a [&'a str],
+    #[serde(flatten)]
+    metadata: Option<SerializedMetadata<'a>>,
+}
+
+#[derive(Serialize)]
+struct SerializedMetadata<'a> {
     _target: &'a str,
     _module_path: Option<&'a str>,
     _file: Option<&'a str>,
@@ -333,6 +340,16 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
                 })
             })
             .unwrap_or(Vec::new());
+        let metadata = if self.include_event_metadata {
+            Some(SerializedMetadata {
+                _target: meta.target(),
+                _module_path: meta.module_path(),
+                _file: meta.file(),
+                _line: meta.line(),
+            })
+        } else {
+            None
+        };
         // TODO: Anything useful to do when the capacity has been reached?
         let _ = self.sender.try_send(Some(LokiEvent {
             trigger_send: !meta.target().starts_with("tracing_loki"),
@@ -343,10 +360,7 @@ impl<S: Subscriber + for<'a> LookupSpan<'a>> tracing_subscriber::Layer<S> for La
                 extra_fields: &self.extra_fields,
                 span_fields,
                 _spans: &spans,
-                _target: meta.target(),
-                _module_path: meta.module_path(),
-                _file: meta.file(),
-                _line: meta.line(),
+                metadata,
             })
             .expect("json serialization shouldn't fail"),
         }));
