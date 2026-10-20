@@ -367,9 +367,20 @@ impl SendQueue {
             to_send: Vec::new(),
         }
     }
-    fn push(&mut self, event: LokiEvent) {
-        // TODO: Add limit.
+    fn push(&mut self, mut event: LokiEvent) -> usize {
+        // Loki rejects lines longer than 256 KiB.
+        let mut length = 256 * 1024;
+        if event.message.len() > length {
+            while !event.message.is_char_boundary(length) {
+                length -= 1;
+            }
+            event.message.truncate(length);
+        }
         self.to_send.push(event);
+        // Drop the oldest messages instead of growing without bounds.
+        let excess = self.to_send.len().saturating_sub(1024);
+        self.to_send.drain(..excess);
+        excess
     }
     fn drop_outstanding(&mut self) -> usize {
         let len = self.sending.len();
@@ -444,6 +455,7 @@ pub struct BackgroundTask {
     buffer: Buffer,
     http_client: reqwest::Client,
     backoff_count: u32,
+    num_overflowed: usize,
     backoff: Option<Pin<Box<tokio::time::Sleep>>>,
     quitting: bool,
     send_task:
@@ -482,6 +494,7 @@ impl BackgroundTask {
                 .build()
                 .expect("reqwest client builder"),
             backoff_count: 0,
+            num_overflowed: 0,
             backoff: None,
             quitting: false,
             send_task: None,
@@ -511,7 +524,7 @@ impl Future for BackgroundTask {
 
         while let Poll::Ready(maybe_maybe_item) = Pin::new(&mut self.receiver).poll_recv(cx) {
             match maybe_maybe_item {
-                Some(Some(item)) => self.queues[item.level].push(item),
+                Some(Some(item)) => self.num_overflowed += self.queues[item.level].push(item),
                 Some(None) => self.quitting = true, // Explicit close.
                 None => self.quitting = true,       // The sender was dropped.
             }
@@ -530,6 +543,17 @@ impl Future for BackgroundTask {
                 match Pin::new(send_task).poll(cx) {
                     Poll::Ready(res) => {
                         if let Err(e) = &res {
+                            // Loki will never accept these requests, so don't
+                            // back off or retry them.
+                            let rejected = matches!(
+                                e.downcast_ref::<reqwest::Error>()
+                                    .and_then(|e| e.status())
+                                    .map(|s| s.as_u16()),
+                                Some(400 | 413 | 422),
+                            );
+                            if rejected {
+                                self.backoff_count = 0;
+                            }
                             let (drop_outstanding, backoff_time) = self.backoff_time();
                             drop(default_guard);
                             tracing::error!(
@@ -540,7 +564,7 @@ impl Future for BackgroundTask {
                             );
                             default_guard =
                                 tracing::subscriber::set_default(NoSubscriber::default());
-                            if drop_outstanding {
+                            if drop_outstanding || rejected {
                                 let num_dropped: usize =
                                     self.queues.values_mut().map(|q| q.drop_outstanding()).sum();
                                 drop(default_guard);
@@ -560,6 +584,16 @@ impl Future for BackgroundTask {
                         let res = res.map_err(|_| ());
                         for q in self.queues.values_mut() {
                             q.on_send_result(res);
+                        }
+                        if self.num_overflowed > 0 {
+                            drop(default_guard);
+                            tracing::error!(
+                                num_dropped = self.num_overflowed,
+                                "dropped messages due to full send queue",
+                            );
+                            default_guard =
+                                tracing::subscriber::set_default(NoSubscriber::default());
+                            self.num_overflowed = 0;
                         }
                         self.send_task = None;
                     }
